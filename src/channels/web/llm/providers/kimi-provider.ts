@@ -1,0 +1,78 @@
+/**
+ * Kimi Provider Adapter
+ *
+ * Kimi uses OpenAI-compatible API
+ */
+
+import OpenAI from 'openai';
+import type { LLMProvider, LLMMessage, LLMTool, LLMResponse } from '../types.js';
+
+export class KimiProvider implements LLMProvider {
+  name = 'Kimi';
+  private client: OpenAI;
+  private model: string;
+
+  constructor(apiKey: string, model: string = 'moonshot-v1-8k') {
+    this.client = new OpenAI({
+      apiKey,
+      baseURL: 'https://api.moonshot.cn/v1',
+    });
+    this.model = model;
+  }
+
+  async chatCompletion(
+    messages: LLMMessage[],
+    tools: LLMTool[],
+    options?: { maxTokens?: number; temperature?: number }
+  ): Promise<LLMResponse> {
+    // Convert our messages to OpenAI format
+    const openaiMessages = messages.map(msg => {
+      if (msg.role === 'tool') {
+        return {
+          role: 'tool' as const,
+          content: msg.content ?? '',
+          tool_call_id: msg.tool_call_id!,
+        };
+      }
+      if (msg.role === 'assistant' && msg.tool_calls && msg.tool_calls.length > 0) {
+        return {
+          role: 'assistant' as const,
+          content: msg.content,
+          tool_calls: msg.tool_calls.map(tc => ({
+            id: tc.id,
+            type: 'function' as const,
+            function: { name: tc.function.name, arguments: tc.function.arguments },
+          })),
+        };
+      }
+      return {
+        role: msg.role as 'system' | 'user' | 'assistant',
+        content: msg.content ?? '',
+      };
+    });
+
+    const response = await this.client.chat.completions.create({
+      model: this.model,
+      messages: openaiMessages as any,
+      tools: tools.length > 0 ? tools as any : undefined,
+      tool_choice: tools.length > 0 ? 'auto' : undefined,
+      max_tokens: options?.maxTokens || 4096,
+      temperature: options?.temperature || 0.7,
+    });
+
+    const choice = response.choices[0];
+
+    return {
+      content: choice.message.content,
+      tool_calls: choice.message.tool_calls?.map(tc => ({
+        id: tc.id,
+        type: 'function' as const,
+        function: {
+          name: tc.function.name,
+          arguments: tc.function.arguments,
+        },
+      })),
+      finish_reason: choice.finish_reason || undefined,
+    };
+  }
+}

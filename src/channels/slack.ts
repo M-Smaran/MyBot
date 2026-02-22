@@ -15,19 +15,26 @@ import { taskScheduler } from '../tools/scheduler.js';
 
 const logger = createModuleLogger('slack');
 
-// Initialize Slack Bolt App
-export const slackApp = new App({
-  token: config.slack.botToken,
-  appToken: config.slack.appToken,
-  socketMode: true,
-  logLevel: config.app.logLevel === 'debug' ? LogLevel.DEBUG : LogLevel.INFO,
-});
-
-// WebClient for additional API calls
-export const webClient = new WebClient(config.slack.botToken);
+// Slack App and WebClient (initialized lazily when startSlackApp is called)
+let slackApp: App | null = null;
+let webClient: WebClient | null = null;
 
 // Bot user ID (populated on startup)
 let botUserId: string | null = null;
+
+function getApp(): App {
+  if (!slackApp) {
+    throw new Error('Slack app not initialized. Call startSlackApp() first.');
+  }
+  return slackApp;
+}
+
+function getWebClient(): WebClient {
+  if (!webClient) {
+    throw new Error('Slack web client not initialized. Call startSlackApp() first.');
+  }
+  return webClient;
+}
 
 // ============================================
 // Helper Functions
@@ -36,7 +43,7 @@ let botUserId: string | null = null;
 async function getBotUserId(): Promise<string> {
   if (botUserId) return botUserId;
 
-  const authResult = await webClient.auth.test();
+  const authResult = await getWebClient().auth.test();
   botUserId = authResult.user_id as string;
   return botUserId;
 }
@@ -69,7 +76,7 @@ async function addReaction(
   if (!config.features.reactions) return;
 
   try {
-    await webClient.reactions.add({
+    await getWebClient().reactions.add({
       channel: channelId,
       timestamp,
       name: emoji,
@@ -85,7 +92,7 @@ async function removeReaction(
   emoji: string
 ): Promise<void> {
   try {
-    await webClient.reactions.remove({
+    await getWebClient().reactions.remove({
       channel: channelId,
       timestamp,
       name: emoji,
@@ -107,7 +114,7 @@ async function isChannelAllowed(channelId: string): Promise<boolean> {
 
 async function getUserInfo(userId: string): Promise<{ name: string; realName: string }> {
   try {
-    const result = await webClient.users.info({ user: userId });
+    const result = await getWebClient().users.info({ user: userId });
     return {
       name: result.user?.name || 'unknown',
       realName: result.user?.real_name || result.user?.name || 'unknown',
@@ -119,7 +126,7 @@ async function getUserInfo(userId: string): Promise<{ name: string; realName: st
 
 async function getChannelInfo(channelId: string): Promise<{ name: string }> {
   try {
-    const result = await webClient.conversations.info({ channel: channelId });
+    const result = await getWebClient().conversations.info({ channel: channelId });
     return { name: result.channel?.name || 'unknown' };
   } catch {
     return { name: 'unknown' };
@@ -127,11 +134,12 @@ async function getChannelInfo(channelId: string): Promise<{ name: string }> {
 }
 
 // ============================================
-// Message Handlers
+// Message Handlers (registered in startSlackApp)
 // ============================================
 
-// Handle incoming messages
-slackApp.message(async ({ message, say }) => {
+function registerMessageHandlers(app: App) {
+  // Handle incoming messages
+  app.message(async ({ message, say }) => {
   // Type guard for message events
   if (message.subtype !== undefined || !('text' in message)) {
     return; // Skip bot messages, edits, etc.
@@ -182,7 +190,7 @@ slackApp.message(async ({ message, say }) => {
   // Handle special commands
   if (cleanText.toLowerCase() === '/help' || cleanText.toLowerCase() === 'help') {
     await say({
-      text: `🤖 *Slack AI Assistant - Help*\n\n*Commands:*\n• \`help\` - Show this help message\n• \`summarize\` or \`tldr\` - Summarize the current thread\n• \`remind me [task] at [time]\` - Schedule a reminder\n• \`my tasks\` - List your scheduled tasks\n• \`cancel task [id]\` - Cancel a scheduled task\n• \`/reset\` - Clear conversation history\n\n*Features:*\n• I remember our conversation context\n• I can help with questions, analysis, and tasks\n• Mention me in channels: <@${currentBotId}>\n\n*Tips:*\n• Start a thread for focused conversations\n• Use \`summarize\` in long threads to catch up`,
+      text: `🤖 *mybot - Help*\n\n*Commands:*\n• \`help\` - Show this help message\n• \`summarize\` or \`tldr\` - Summarize the current thread\n• \`remind me [task] at [time]\` - Schedule a reminder\n• \`my tasks\` - List your scheduled tasks\n• \`cancel task [id]\` - Cancel a scheduled task\n• \`/reset\` - Clear conversation history\n\n*Features:*\n• I remember our conversation context\n• I can help with questions, analysis, and tasks\n• Mention me in channels: <@${currentBotId}>\n\n*Tips:*\n• Start a thread for focused conversations\n• Use \`summarize\` in long threads to catch up`,
       thread_ts: thread_ts || ts,
     });
     return;
@@ -199,7 +207,7 @@ slackApp.message(async ({ message, say }) => {
 
       try {
         // Fetch thread messages
-        const threadResult = await webClient.conversations.replies({
+        const threadResult = await getWebClient().conversations.replies({
           channel,
           ts: thread_ts,
           limit: 100,
@@ -354,10 +362,10 @@ slackApp.message(async ({ message, say }) => {
       thread_ts: thread_ts || ts,
     });
   }
-});
+  });
 
-// Handle app mentions
-slackApp.event('app_mention', async ({ event, say }) => {
+  // Handle app mentions
+  app.event('app_mention', async ({ event, say }) => {
   const { user, channel, ts, thread_ts, text } = event;
   
   logger.info(`App mentioned by ${user} in ${channel}`);
@@ -395,14 +403,14 @@ slackApp.event('app_mention', async ({ event, say }) => {
       thread_ts: thread_ts || ts,
     });
   }
-});
+  });
 
-// ============================================
-// Slash Commands
-// ============================================
+  // ============================================
+  // Slash Commands
+  // ============================================
 
-// Approve pairing command
-slackApp.command('/approve', async ({ command, ack, respond }) => {
+  // Approve pairing command
+  app.command('/approve', async ({ command, ack, respond }) => {
   await ack();
 
   const code = command.text.trim().toUpperCase();
@@ -417,10 +425,10 @@ slackApp.command('/approve', async ({ command, ack, respond }) => {
   } else {
     await respond(`❌ Invalid or expired pairing code: ${code}`);
   }
-});
+  });
 
-// Status command
-slackApp.command('/assistant-status', async ({ command, ack, respond }) => {
+  // Status command
+  app.command('/assistant-status', async ({ command, ack, respond }) => {
   await ack();
 
   const status = {
@@ -433,21 +441,22 @@ slackApp.command('/assistant-status', async ({ command, ack, respond }) => {
     text: `🤖 *Assistant Status*\n\`\`\`${JSON.stringify(status, null, 2)}\`\`\``,
     response_type: 'ephemeral',
   });
-});
+  });
 
-// ============================================
-// Reaction Handlers
-// ============================================
+  // ============================================
+  // Reaction Handlers
+  // ============================================
 
-slackApp.event('reaction_added', async ({ event }) => {
+  app.event('reaction_added', async ({ event }) => {
   logger.debug('Reaction added', {
     user: event.user,
     reaction: event.reaction,
     item: event.item,
   });
 
-  // You can add custom logic here, e.g., auto-acknowledge with 👍
-});
+    // You can add custom logic here, e.g., auto-acknowledge with 👍
+  });
+}
 
 // ============================================
 // Startup
@@ -455,6 +464,21 @@ slackApp.event('reaction_added', async ({ event }) => {
 
 export async function startSlackApp(): Promise<void> {
   try {
+    // Initialize Slack app
+    slackApp = new App({
+      token: config.slack.botToken,
+      appToken: config.slack.appToken,
+      socketMode: true,
+      logLevel: config.app.logLevel === 'debug' ? LogLevel.DEBUG : LogLevel.INFO,
+    });
+
+    // Initialize WebClient
+    webClient = new WebClient(config.slack.botToken);
+
+    // Register all message handlers
+    registerMessageHandlers(slackApp);
+
+    // Start the app
     await slackApp.start();
 
     // Get and cache bot user ID
@@ -472,6 +496,8 @@ export async function startSlackApp(): Promise<void> {
 
 export async function stopSlackApp(): Promise<void> {
   taskScheduler.stop();
-  await slackApp.stop();
-  logger.info('Slack app stopped');
+  if (slackApp) {
+    await slackApp.stop();
+    logger.info('Slack app stopped');
+  }
 }

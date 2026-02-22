@@ -5,10 +5,10 @@ dotenv.config();
 
 // Configuration schema with validation
 const ConfigSchema = z.object({
-  // Slack Configuration
+  // Slack Configuration (optional if only using web interface)
   slack: z.object({
-    botToken: z.string().min(1, 'SLACK_BOT_TOKEN is required'),
-    appToken: z.string().min(1, 'SLACK_APP_TOKEN is required'),
+    botToken: z.string().optional(),
+    appToken: z.string().optional(),
     userToken: z.string().optional(), // For reminders API (xoxp-...)
     signingSecret: z.string().optional(),
   }),
@@ -57,6 +57,14 @@ const ConfigSchema = z.object({
     taskScheduler: z.boolean().default(true),
     reactions: z.boolean().default(true),
     typingIndicator: z.boolean().default(true),
+  }),
+
+  // Web Interface Configuration
+  web: z.object({
+    enabled: z.boolean().default(true),
+    port: z.number().default(3001),
+    corsOrigins: z.array(z.string()).default(['http://localhost:3000', 'http://localhost:5173']),
+    encryptionKey: z.string().optional(), // For API key encryption
   }),
 });
 
@@ -109,6 +117,12 @@ function loadConfig(): Config {
       reactions: process.env.ENABLE_REACTIONS !== 'false',
       typingIndicator: process.env.ENABLE_TYPING_INDICATOR !== 'false',
     },
+    web: {
+      enabled: process.env.WEB_ENABLED !== 'false',
+      port: parseInt(process.env.WEB_PORT || '3001', 10),
+      corsOrigins: parseArrayFromEnv(process.env.WEB_CORS_ORIGINS),
+      encryptionKey: process.env.WEB_ENCRYPTION_KEY || 'default-encryption-key-change-in-production-32-chars-min',
+    },
   };
 
   const result = ConfigSchema.safeParse(rawConfig);
@@ -121,10 +135,10 @@ function loadConfig(): Config {
     process.exit(1);
   }
 
-  // Validate that at least one AI provider is configured
-  if (!result.data.ai.anthropicApiKey && !result.data.ai.openaiApiKey) {
-    console.error('At least one AI provider (Anthropic or OpenAI) must be configured');
-    process.exit(1);
+  // Validate that at least one AI provider is configured (only for web mode)
+  // Slack mode will use per-user API keys
+  if (result.data.web.enabled && !result.data.ai.anthropicApiKey && !result.data.ai.openaiApiKey) {
+    console.warn('No default AI provider configured. Web users will need to provide their own API keys.');
   }
 
   return result.data;

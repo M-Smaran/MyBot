@@ -95,10 +95,24 @@ async function main(): Promise<void> {
     taskScheduler.start();
     logger.info('✅ Task scheduler started');
 
-    // 6. Start Slack app
-    logger.info('Starting Slack app...');
-    await startSlackApp();
-    logger.info('✅ Slack app started');
+    // 6. Start Slack app (if configured)
+    if (config.slack.botToken && config.slack.appToken) {
+      logger.info('Starting Slack app...');
+      await startSlackApp();
+      logger.info('✅ Slack app started');
+    } else {
+      logger.info('⏭️  Slack app disabled (no tokens configured)');
+    }
+
+    // 7. Start Web server (if enabled)
+    if (config.web.enabled) {
+      logger.info('Starting web server...');
+      const { startWebServer } = await import('./channels/web/server.js');
+      await startWebServer();
+      logger.info('✅ Web server started');
+    } else {
+      logger.info('⏭️  Web server disabled');
+    }
 
     // Ready!
     logger.info('='.repeat(50));
@@ -109,6 +123,8 @@ async function main(): Promise<void> {
     logger.info(`  • Long-Term Memory: ${config.memory.enabled && isMemoryEnabled() ? '✅' : '❌'}`);
     logger.info(`  • MCP (GitHub/Notion): ${isMCPEnabled() ? '✅ ' + getConnectedServers().join(', ') : '❌'}`);
     logger.info(`  • Task Scheduler: ✅`);
+    logger.info(`  • Slack Integration: ${config.slack.botToken && config.slack.appToken ? '✅' : '❌'}`);
+    logger.info(`  • Web Interface: ${config.web.enabled ? `✅ (http://localhost:${config.web.port})` : '❌'}`);
     logger.info(`  • AI Model: ${config.ai.defaultModel}`);
     logger.info('='.repeat(50));
     logger.info('Press Ctrl+C to stop');
@@ -127,9 +143,18 @@ async function shutdown(signal: string): Promise<void> {
   logger.info(`\n${signal} received, shutting down gracefully...`);
 
   try {
+    // Stop Web server
+    if (config.web.enabled) {
+      logger.info('Stopping web server...');
+      const { stopWebServer } = await import('./channels/web/server.js');
+      await stopWebServer();
+    }
+
     // Stop Slack app
-    logger.info('Stopping Slack app...');
-    await stopSlackApp();
+    if (config.slack.botToken && config.slack.appToken) {
+      logger.info('Stopping Slack app...');
+      await stopSlackApp();
+    }
 
     // Stop MCP servers
     logger.info('Stopping MCP servers...');

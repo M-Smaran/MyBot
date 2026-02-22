@@ -87,6 +87,34 @@ function initSchema() {
     )
   `);
 
+  // API keys table (for web interface - global keys, no per-user)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS api_keys (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      provider TEXT NOT NULL,
+      encrypted_key TEXT NOT NULL,
+      encryption_iv TEXT NOT NULL,
+      name TEXT,
+      is_active INTEGER DEFAULT 0,
+      created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+      last_used INTEGER,
+      UNIQUE(provider, name)
+    )
+  `);
+
+  // Calendar credentials table (stores encrypted Google service account JSON)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS calendar_credentials (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      provider TEXT NOT NULL DEFAULT 'google',
+      encrypted_credentials TEXT NOT NULL,
+      encryption_iv TEXT NOT NULL,
+      label TEXT,
+      is_active INTEGER DEFAULT 1,
+      created_at INTEGER NOT NULL DEFAULT (unixepoch())
+    )
+  `);
+
   // Create indexes for performance
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id);
@@ -95,6 +123,7 @@ function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_sessions_channel ON sessions(channel_id);
     CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_status ON scheduled_tasks(status);
     CREATE INDEX IF NOT EXISTS idx_pairing_codes_user ON pairing_codes(user_id);
+    CREATE INDEX IF NOT EXISTS idx_api_keys_active ON api_keys(is_active);
   `);
 
   logger.info('Database schema initialized');
@@ -181,6 +210,22 @@ export function getOrCreateSession(
     lastActivity: Math.floor(Date.now() / 1000),
     metadata: null,
   };
+}
+
+/**
+ * Ensure a web session row exists for the given sessionId.
+ * Web sessions use the pre-generated ID format `web:<ts>:<rand>`.
+ */
+export function ensureWebSession(sessionId: string): void {
+  const existing = db.prepare(`SELECT id FROM sessions WHERE id = ?`).get(sessionId);
+  if (existing) {
+    db.prepare(`UPDATE sessions SET last_activity = unixepoch() WHERE id = ?`).run(sessionId);
+  } else {
+    db.prepare(`
+      INSERT INTO sessions (id, user_id, channel_id, thread_ts, session_type)
+      VALUES (?, ?, NULL, NULL, 'dm')
+    `).run(sessionId, sessionId);
+  }
 }
 
 export function getSession(sessionId: string): Session | null {
@@ -447,6 +492,191 @@ export function closeDatabase(): void {
   if (db) {
     db.close();
   }
+}
+
+// ============================================
+// API Key Management
+// ============================================
+
+export interface APIKey {
+  id: number;
+  provider: string;
+  encryptedKey: string;
+  encryptionIv: string;
+  name: string | null;
+  isActive: number;
+  createdAt: number;
+  lastUsed: number | null;
+}
+
+export function createAPIKey(
+  provider: string,
+  encryptedKey: string,
+  encryptionIv: string,
+  name: string | null = null
+): APIKey {
+  const result = db.prepare(`
+    INSERT INTO api_keys (provider, encrypted_key, encryption_iv, name)
+    VALUES (?, ?, ?, ?)
+  `).run(provider, encryptedKey, encryptionIv, name);
+
+  return {
+    id: Number(result.lastInsertRowid),
+    provider,
+    encryptedKey,
+    encryptionIv,
+    name,
+    isActive: 0,
+    createdAt: Math.floor(Date.now() / 1000),
+    lastUsed: null,
+  };
+}
+
+export function getAllAPIKeys(): APIKey[] {
+  return db.prepare(`
+    SELECT
+      id,
+      provider,
+      encrypted_key as encryptedKey,
+      encryption_iv as encryptionIv,
+      name,
+      is_active as isActive,
+      created_at as createdAt,
+      last_used as lastUsed
+    FROM api_keys
+    ORDER BY created_at DESC
+  `).all() as APIKey[];
+}
+
+export function getActiveAPIKey(provider?: string): APIKey | null {
+  if (provider) {
+    return db.prepare(`
+      SELECT
+        id,
+        provider,
+        encrypted_key as encryptedKey,
+        encryption_iv as encryptionIv,
+        name,
+        is_active as isActive,
+        created_at as createdAt,
+        last_used as lastUsed
+      FROM api_keys
+      WHERE provider = ? AND is_active = 1
+      LIMIT 1
+    `).get(provider) as APIKey | undefined || null;
+  } else {
+    return db.prepare(`
+      SELECT
+        id,
+        provider,
+        encrypted_key as encryptedKey,
+        encryption_iv as encryptionIv,
+        name,
+        is_active as isActive,
+        created_at as createdAt,
+        last_used as lastUsed
+      FROM api_keys
+      WHERE is_active = 1
+      LIMIT 1
+    `).get() as APIKey | undefined || null;
+  }
+}
+
+export function setActiveAPIKey(keyId: number): boolean {
+  // First, get the provider of the key we want to activate
+  const key = db.prepare(`
+    SELECT provider FROM api_keys WHERE id = ?
+  `).get(keyId) as { provider: string } | undefined;
+
+  if (!key) return false;
+
+  // Deactivate all keys for this provider
+  db.prepare(`
+    UPDATE api_keys SET is_active = 0 WHERE provider = ?
+  `).run(key.provider);
+
+  // Activate the selected key
+  const result = db.prepare(`
+    UPDATE api_keys SET is_active = 1 WHERE id = ?
+  `).run(keyId);
+
+  return result.changes > 0;
+}
+
+export function deleteAPIKey(keyId: number): boolean {
+  const result = db.prepare(`
+    DELETE FROM api_keys WHERE id = ?
+  `).run(keyId);
+
+  return result.changes > 0;
+}
+
+export function updateAPIKeyLastUsed(keyId: number): void {
+  db.prepare(`
+    UPDATE api_keys SET last_used = unixepoch() WHERE id = ?
+  `).run(keyId);
+}
+
+// ============================================
+// Calendar Credentials
+// ============================================
+
+export interface CalendarCredential {
+  id: number;
+  provider: string;
+  encryptedCredentials: string;
+  encryptionIv: string;
+  label: string | null;
+  isActive: number;
+  createdAt: number;
+}
+
+export function saveCalendarCredential(
+  encryptedCredentials: string,
+  encryptionIv: string,
+  label: string | null = null,
+  provider: string = 'google'
+): CalendarCredential {
+  // Replace any existing credential for this provider
+  db.prepare(`DELETE FROM calendar_credentials WHERE provider = ?`).run(provider);
+
+  const result = db.prepare(`
+    INSERT INTO calendar_credentials (provider, encrypted_credentials, encryption_iv, label, is_active)
+    VALUES (?, ?, ?, ?, 1)
+  `).run(provider, encryptedCredentials, encryptionIv, label);
+
+  return {
+    id: Number(result.lastInsertRowid),
+    provider,
+    encryptedCredentials,
+    encryptionIv,
+    label,
+    isActive: 1,
+    createdAt: Math.floor(Date.now() / 1000),
+  };
+}
+
+export function getCalendarCredential(provider: string = 'google'): CalendarCredential | null {
+  const row = db.prepare(`
+    SELECT
+      id,
+      provider,
+      encrypted_credentials as encryptedCredentials,
+      encryption_iv as encryptionIv,
+      label,
+      is_active as isActive,
+      created_at as createdAt
+    FROM calendar_credentials
+    WHERE provider = ? AND is_active = 1
+    LIMIT 1
+  `).get(provider) as CalendarCredential | undefined;
+
+  return row || null;
+}
+
+export function deleteCalendarCredential(provider: string = 'google'): boolean {
+  const result = db.prepare(`DELETE FROM calendar_credentials WHERE provider = ?`).run(provider);
+  return result.changes > 0;
 }
 
 // Export database instance for advanced queries

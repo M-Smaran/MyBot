@@ -64,30 +64,31 @@ export async function initializeMemory(): Promise<void> {
     return;
   }
 
+  const apiKey = process.env.MEM0_API_KEY;
+  if (!apiKey) {
+    logger.info('No MEM0_API_KEY configured - memory features will be disabled');
+    isInitialized = false;
+    return;
+  }
+
   try {
     logger.info('Initializing mem0 cloud client...');
-
-    const apiKey = process.env.MEM0_API_KEY;
-    if (!apiKey) {
-      throw new Error('MEM0_API_KEY environment variable is required');
-    }
 
     // Import mem0ai MemoryClient for cloud API
     const mem0Module = await import('mem0ai');
     const MemoryClient = mem0Module.default || mem0Module.MemoryClient;
-    
+
     if (!MemoryClient) {
       throw new Error('MemoryClient not found in mem0ai package');
     }
 
     // Initialize cloud client
     memoryInstance = new MemoryClient({ apiKey });
-    
+
     isInitialized = true;
     logger.info('✅ mem0 cloud client initialized');
   } catch (error: any) {
     logger.error(`Failed to initialize mem0: ${error.message}`);
-    logger.error(`Stack: ${error.stack}`);
     logger.warn('Memory features will be disabled');
     isInitialized = false;
   }

@@ -1,0 +1,71 @@
+import type { APIKey } from '../types';
+
+const API_BASE = '/api';
+
+export const api = {
+  async getHealth(): Promise<{ status: string; hasActiveLLM: boolean }> {
+    const res = await fetch(`${API_BASE}/health`);
+    if (!res.ok) throw new Error('Failed to get health status');
+    return res.json();
+  },
+
+  async getAPIKeys(): Promise<APIKey[]> {
+    const res = await fetch(`${API_BASE}/settings/api-keys`);
+    if (!res.ok) throw new Error('Failed to get API keys');
+    const data = await res.json();
+    return data.keys;
+  },
+
+  async addAPIKey(provider: string, apiKey: string, name?: string): Promise<APIKey> {
+    const res = await fetch(`${API_BASE}/settings/api-keys`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ provider, apiKey, name }),
+    });
+    if (!res.ok) {
+      const error = await res.json();
+      throw new Error(error.error || 'Failed to add API key');
+    }
+    return res.json();
+  },
+
+  async activateAPIKey(id: number): Promise<void> {
+    const res = await fetch(`${API_BASE}/settings/api-keys/${id}/activate`, {
+      method: 'POST',
+    });
+    if (!res.ok) throw new Error('Failed to activate API key');
+  },
+
+  async deleteAPIKey(id: number): Promise<void> {
+    const res = await fetch(`${API_BASE}/settings/api-keys/${id}`, {
+      method: 'DELETE',
+    });
+    if (!res.ok) throw new Error('Failed to delete API key');
+  },
+
+  // ── Calendar ────────────────────────────────────────────────────────────────
+
+  async getCalendarStatus(): Promise<{ configured: boolean; label: string | null; createdAt: number | null }> {
+    const res = await fetch(`${API_BASE}/settings/calendar`);
+    if (!res.ok) throw new Error('Failed to get calendar status');
+    return res.json();
+  },
+
+  async saveCalendarCredentials(serviceAccountJson: string, label?: string): Promise<{ success: boolean; clientEmail: string; label: string }> {
+    const res = await fetch(`${API_BASE}/settings/calendar`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ serviceAccountJson, label }),
+    });
+    if (!res.ok) {
+      const error = await res.json();
+      throw new Error(error.error || 'Failed to save calendar credentials');
+    }
+    return res.json();
+  },
+
+  async deleteCalendarCredentials(): Promise<void> {
+    const res = await fetch(`${API_BASE}/settings/calendar`, { method: 'DELETE' });
+    if (!res.ok) throw new Error('Failed to remove calendar credentials');
+  },
+};

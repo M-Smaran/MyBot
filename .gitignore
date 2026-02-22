@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.env
+data/
+logs/
+*.db
+package-lock.json
+web-frontend/node_modules/
+web-frontend/dist/

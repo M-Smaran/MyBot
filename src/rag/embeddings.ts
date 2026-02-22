@@ -37,10 +37,16 @@ import { createModuleLogger } from '../utils/logger.js';
 
 const logger = createModuleLogger('embeddings');
 
-// Initialize OpenAI client
-const openai = new OpenAI({
-  apiKey: config.ai.openaiApiKey,
-});
+// Initialize OpenAI client (optional - only if API key is configured)
+let openai: OpenAI | null = null;
+if (config.ai.openaiApiKey) {
+  openai = new OpenAI({
+    apiKey: config.ai.openaiApiKey,
+  });
+  logger.info('OpenAI embeddings client initialized');
+} else {
+  logger.info('No OpenAI API key - RAG embeddings will be disabled');
+}
 
 // Embedding model configuration
 // text-embedding-3-small: Good balance of quality and cost
@@ -63,6 +69,11 @@ const RATE_LIMIT_DELAY_MS = 100; // Small delay between batches
  * console.log(embedding.length); // 1536
  */
 export async function createEmbedding(text: string): Promise<number[]> {
+  if (!openai) {
+    logger.warn('OpenAI client not initialized - RAG embeddings are disabled');
+    return new Array(EMBEDDING_DIMENSIONS).fill(0);
+  }
+
   if (!text || text.trim().length === 0) {
     logger.warn('Attempted to embed empty text');
     return new Array(EMBEDDING_DIMENSIONS).fill(0);
@@ -76,7 +87,7 @@ export async function createEmbedding(text: string): Promise<number[]> {
 
     const embedding = response.data[0].embedding;
     logger.debug(`Created embedding for text (${text.length} chars)`);
-    
+
     return embedding;
   } catch (error: any) {
     logger.error(`Failed to create embedding: ${error.message}`);
@@ -106,6 +117,11 @@ export async function createEmbedding(text: string): Promise<number[]> {
  * // embeddings[0] corresponds to "First message", etc.
  */
 export async function createEmbeddings(texts: string[]): Promise<number[][]> {
+  if (!openai) {
+    logger.warn('OpenAI client not initialized - RAG embeddings are disabled');
+    return texts.map(() => new Array(EMBEDDING_DIMENSIONS).fill(0));
+  }
+
   if (texts.length === 0) {
     return [];
   }
@@ -123,14 +139,14 @@ export async function createEmbeddings(texts: string[]): Promise<number[][]> {
   }
 
   const results: number[][] = new Array(texts.length).fill(null);
-  
+
   // Process in batches to respect rate limits
   for (let i = 0; i < validTexts.length; i += MAX_BATCH_SIZE) {
     const batch = validTexts.slice(i, i + MAX_BATCH_SIZE);
-    
+
     try {
       logger.info(`Processing embedding batch ${Math.floor(i / MAX_BATCH_SIZE) + 1}/${Math.ceil(validTexts.length / MAX_BATCH_SIZE)}`);
-      
+
       const response = await openai.embeddings.create({
         model: EMBEDDING_MODEL,
         input: batch.map(b => b.text),

@@ -75,14 +75,21 @@ import {
 
 const logger = createModuleLogger('agent');
 
-// Initialize clients
-const openaiClient = new OpenAI({ apiKey: config.ai.openaiApiKey });
+// Initialize clients (only if API key is provided)
+// For web interface, clients are created per-request with user's API keys
+let openaiClient: OpenAI | null = null;
+if (config.ai.openaiApiKey) {
+  openaiClient = new OpenAI({ apiKey: config.ai.openaiApiKey });
+  logger.info('Default OpenAI client initialized');
+} else {
+  logger.info('No default OpenAI key - will use user-provided keys for web interface');
+}
 
 /**
  * System prompt that explains RAG and MCP capabilities.
  * The agent knows it has access to historical Slack messages and external tools.
  */
-const SYSTEM_PROMPT = `You are a helpful AI assistant integrated into Slack.
+const SYSTEM_PROMPT = `You are mybot, a helpful AI assistant integrated into Slack.
 
 ## MANDATORY TOOL USAGE - READ CAREFULLY:
 
@@ -719,6 +726,10 @@ export async function processMessage(
   logger.info(`First 10 tools: ${toolNames.join(', ')}...`);
   
   // 4. Call LLM with tools
+  if (!openaiClient) {
+    throw new Error('No LLM client available. Please configure an API key or use the web interface.');
+  }
+
   let response = await openaiClient.chat.completions.create({
     model: config.ai.defaultModel.includes('gpt') ? config.ai.defaultModel : 'gpt-4o',
     messages,
@@ -812,6 +823,10 @@ Conversation:
 ${conversationText}
 
 Summary:`;
+
+  if (!openaiClient) {
+    return 'Summary feature requires OpenAI API key to be configured.';
+  }
 
   const response = await openaiClient.chat.completions.create({
     model: config.ai.defaultModel.includes('gpt') ? config.ai.defaultModel : 'gpt-4o',
