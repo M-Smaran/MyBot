@@ -102,14 +102,16 @@ function initSchema() {
     )
   `);
 
-  // Calendar credentials table (stores encrypted Google service account JSON)
+  // Calendar credentials table (stores encrypted Google service account JSON or OAuth tokens)
   db.exec(`
     CREATE TABLE IF NOT EXISTS calendar_credentials (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       provider TEXT NOT NULL DEFAULT 'google',
+      auth_type TEXT NOT NULL DEFAULT 'service_account',
       encrypted_credentials TEXT NOT NULL,
       encryption_iv TEXT NOT NULL,
       label TEXT,
+      oauth_email TEXT,
       is_active INTEGER DEFAULT 1,
       created_at INTEGER NOT NULL DEFAULT (unixepoch())
     )
@@ -624,9 +626,11 @@ export function updateAPIKeyLastUsed(keyId: number): void {
 export interface CalendarCredential {
   id: number;
   provider: string;
+  authType: 'service_account' | 'oauth';
   encryptedCredentials: string;
   encryptionIv: string;
   label: string | null;
+  oauthEmail: string | null;
   isActive: number;
   createdAt: number;
 }
@@ -641,16 +645,44 @@ export function saveCalendarCredential(
   db.prepare(`DELETE FROM calendar_credentials WHERE provider = ?`).run(provider);
 
   const result = db.prepare(`
-    INSERT INTO calendar_credentials (provider, encrypted_credentials, encryption_iv, label, is_active)
-    VALUES (?, ?, ?, ?, 1)
+    INSERT INTO calendar_credentials (provider, auth_type, encrypted_credentials, encryption_iv, label, is_active)
+    VALUES (?, 'service_account', ?, ?, ?, 1)
   `).run(provider, encryptedCredentials, encryptionIv, label);
 
   return {
     id: Number(result.lastInsertRowid),
     provider,
+    authType: 'service_account',
     encryptedCredentials,
     encryptionIv,
     label,
+    oauthEmail: null,
+    isActive: 1,
+    createdAt: Math.floor(Date.now() / 1000),
+  };
+}
+
+export function saveOAuthCalendarCredential(
+  encryptedTokens: string,
+  encryptionIv: string,
+  email: string,
+  provider: string = 'google'
+): CalendarCredential {
+  db.prepare(`DELETE FROM calendar_credentials WHERE provider = ?`).run(provider);
+
+  const result = db.prepare(`
+    INSERT INTO calendar_credentials (provider, auth_type, encrypted_credentials, encryption_iv, label, oauth_email, is_active)
+    VALUES (?, 'oauth', ?, ?, ?, ?, 1)
+  `).run(provider, encryptedTokens, encryptionIv, email, email);
+
+  return {
+    id: Number(result.lastInsertRowid),
+    provider,
+    authType: 'oauth',
+    encryptedCredentials: encryptedTokens,
+    encryptionIv,
+    label: email,
+    oauthEmail: email,
     isActive: 1,
     createdAt: Math.floor(Date.now() / 1000),
   };
@@ -661,9 +693,11 @@ export function getCalendarCredential(provider: string = 'google'): CalendarCred
     SELECT
       id,
       provider,
+      auth_type as authType,
       encrypted_credentials as encryptedCredentials,
       encryption_iv as encryptionIv,
       label,
+      oauth_email as oauthEmail,
       is_active as isActive,
       created_at as createdAt
     FROM calendar_credentials

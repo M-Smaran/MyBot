@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Plus, Trash2, Check, Key, Calendar, ChevronDown, ChevronUp, AlertCircle } from 'lucide-react';
+import { Plus, Trash2, Check, Key, Calendar, ChevronDown, ChevronUp, AlertCircle, ExternalLink } from 'lucide-react';
 import { api } from '../services/api';
 import type { APIKey } from '../types';
 
@@ -9,11 +9,14 @@ const PROVIDERS = [
   { value: 'gemini', label: 'Google Gemini', placeholder: 'AI...' },
   { value: 'kimi', label: 'Kimi (Moonshot)', placeholder: 'sk-...' },
   { value: 'together', label: 'Together.ai', placeholder: 'your-together-api-key' },
+  { value: 'groq', label: 'Groq (Llama)', placeholder: 'gsk_...' },
 ];
 
 interface CalendarStatus {
   configured: boolean;
+  authType: string | null;
   label: string | null;
+  email: string | null;
   createdAt: number | null;
 }
 
@@ -25,13 +28,14 @@ export function SettingsPage() {
   const [formData, setFormData] = useState({ provider: 'openai', apiKey: '', name: '' });
 
   // ── Calendar ──────────────────────────────────────────────────────────────
-  const [calStatus, setCalStatus] = useState<CalendarStatus>({ configured: false, label: null, createdAt: null });
+  const [calStatus, setCalStatus] = useState<CalendarStatus>({ configured: false, authType: null, label: null, email: null, createdAt: null });
   const [calLoading, setCalLoading] = useState(true);
-  const [showCalForm, setShowCalForm] = useState(false);
+  const [showServiceAccountForm, setShowServiceAccountForm] = useState(false);
   const [showCalInstructions, setShowCalInstructions] = useState(false);
   const [calJson, setCalJson] = useState('');
   const [calLabel, setCalLabel] = useState('');
   const [calSaving, setCalSaving] = useState(false);
+  const [oauthConnecting, setOauthConnecting] = useState(false);
 
   // ── Shared ─────────────────────────────────────────────────────────────────
   const [error, setError] = useState('');
@@ -40,6 +44,18 @@ export function SettingsPage() {
   useEffect(() => {
     loadKeys();
     loadCalendarStatus();
+
+    // Handle OAuth redirect result (?calendar=connected or ?calendar=error)
+    const params = new URLSearchParams(window.location.search);
+    const calParam = params.get('calendar');
+    if (calParam === 'connected') {
+      setSuccess('Google Calendar connected successfully!');
+      window.history.replaceState({}, '', '/settings');
+    } else if (calParam === 'error') {
+      const msg = params.get('msg');
+      setError(`Failed to connect Google Calendar${msg ? `: ${msg}` : '. Please try again.'}`);
+      window.history.replaceState({}, '', '/settings');
+    }
   }, []);
 
   // ── LLM handlers ─────────────────────────────────────────────────────────
@@ -99,6 +115,18 @@ export function SettingsPage() {
     }
   };
 
+  const handleOAuthConnect = async () => {
+    setError(''); setSuccess('');
+    setOauthConnecting(true);
+    try {
+      const { url } = await api.getGoogleAuthUrl();
+      window.location.href = url;
+    } catch (err: any) {
+      setError(err.message);
+      setOauthConnecting(false);
+    }
+  };
+
   const handleCalSave = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(''); setSuccess('');
@@ -108,7 +136,7 @@ export function SettingsPage() {
       setSuccess(`Google Calendar connected! Service account: ${result.clientEmail}`);
       setCalJson('');
       setCalLabel('');
-      setShowCalForm(false);
+      setShowServiceAccountForm(false);
       await loadCalendarStatus();
     } catch (err: any) {
       setError(err.message);
@@ -157,7 +185,7 @@ export function SettingsPage() {
             <h2 className="text-xl font-semibold">AI Provider API Keys</h2>
           </div>
           <p className="text-dark-400 text-sm mb-4">
-            Add your API key for OpenAI, Anthropic Claude, Google Gemini, or Kimi. The active key is used for all chat responses.
+            Add your API key for OpenAI, Anthropic Claude, Google Gemini, or others. The active key is used for all chat responses.
           </p>
 
           {!showForm && (
@@ -271,7 +299,7 @@ export function SettingsPage() {
             <h2 className="text-xl font-semibold">Google Calendar</h2>
           </div>
           <p className="text-dark-400 text-sm mb-4">
-            Connect a Google service account so the AI assistant can view, book, update and cancel calendar events on your behalf.
+            Connect your Google Calendar so the AI assistant can view, book, update and cancel events on your behalf.
           </p>
 
           {/* Status card */}
@@ -283,11 +311,14 @@ export function SettingsPage() {
                 <div className="flex items-center space-x-3">
                   <Check className="w-5 h-5 text-green-400" />
                   <div>
-                    <div className="font-medium text-green-400">Connected</div>
-                    {calStatus.label && <div className="text-sm text-dark-400">{calStatus.label}</div>}
+                    <div className="font-medium text-green-400">
+                      Connected {calStatus.authType === 'oauth' ? 'via Google Account' : 'via Service Account'}
+                    </div>
+                    {calStatus.email && <div className="text-sm text-dark-300">{calStatus.email}</div>}
+                    {calStatus.label && !calStatus.email && <div className="text-sm text-dark-400">{calStatus.label}</div>}
                     {calStatus.createdAt && (
                       <div className="text-xs text-dark-500">
-                        Added {new Date(calStatus.createdAt * 1000).toLocaleDateString()}
+                        Connected {new Date(calStatus.createdAt * 1000).toLocaleDateString()}
                       </div>
                     )}
                   </div>
@@ -306,82 +337,89 @@ export function SettingsPage() {
             </div>
           )}
 
-          {/* Connect form toggle */}
-          {!calStatus.configured && !showCalForm && (
-            <button onClick={() => setShowCalForm(true)} className="btn-primary flex items-center space-x-2">
-              <Plus className="w-5 h-5" />
-              <span>Connect Google Calendar</span>
-            </button>
-          )}
+          {/* Connect options */}
+          {!calStatus.configured && (
+            <div className="space-y-3">
+              {/* Primary: OAuth */}
+              <button
+                onClick={handleOAuthConnect}
+                disabled={oauthConnecting}
+                className="w-full flex items-center justify-center space-x-3 px-6 py-3 bg-white text-gray-800 rounded-lg font-medium hover:bg-gray-100 transition-colors disabled:opacity-50"
+              >
+                <svg className="w-5 h-5" viewBox="0 0 48 48">
+                  <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/>
+                  <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/>
+                  <path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/>
+                  <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/>
+                </svg>
+                <span>{oauthConnecting ? 'Redirecting to Google...' : 'Connect with Google'}</span>
+                {!oauthConnecting && <ExternalLink className="w-4 h-4 opacity-60" />}
+              </button>
 
-          {showCalForm && (
-            <div className="card">
-              <h3 className="text-lg font-semibold mb-4 flex items-center space-x-2">
-                <Calendar className="w-5 h-5 text-primary-500" />
-                <span>Paste Service Account Credentials</span>
-              </h3>
-
-              {/* Collapsible instructions */}
-              <div className="mb-4 bg-dark-800 rounded-lg overflow-hidden">
+              {/* Secondary: Service Account (collapsible) */}
+              <div className="border border-dark-700 rounded-lg overflow-hidden">
                 <button
                   type="button"
-                  onClick={() => setShowCalInstructions(!showCalInstructions)}
-                  className="w-full flex items-center justify-between px-4 py-3 text-sm text-dark-300 hover:text-white transition-colors"
+                  onClick={() => setShowServiceAccountForm(!showServiceAccountForm)}
+                  className="w-full flex items-center justify-between px-4 py-3 text-sm text-dark-400 hover:text-white transition-colors"
                 >
-                  <span className="font-medium">How to get service account credentials</span>
-                  {showCalInstructions ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                  <span>Use a service account instead (advanced)</span>
+                  {showServiceAccountForm ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
                 </button>
-                {showCalInstructions && (
-                  <ol className="px-4 pb-4 space-y-2 text-sm text-dark-300 list-decimal list-inside">
-                    <li>Go to <span className="text-primary-400">console.cloud.google.com</span> and create or select a project.</li>
-                    <li>Enable the <span className="text-white font-medium">Google Calendar API</span> for the project.</li>
-                    <li>Go to <span className="text-white font-medium">IAM &amp; Admin → Service Accounts</span> and create a new service account.</li>
-                    <li>Click the service account → <span className="text-white font-medium">Keys → Add Key → Create new key (JSON)</span>. Download the file.</li>
-                    <li>Open your Google Calendar → <span className="text-white font-medium">Settings → Share with specific people</span>. Add the service account email (ends in <code className="text-primary-400">@...iam.gserviceaccount.com</code>) with <span className="text-white font-medium">"Make changes to events"</span> permission.</li>
-                    <li>Paste the entire contents of the downloaded JSON file below.</li>
-                  </ol>
+
+                {showServiceAccountForm && (
+                  <div className="px-4 pb-4 border-t border-dark-700">
+                    {/* Instructions */}
+                    <div className="mt-4 mb-4 bg-dark-800 rounded-lg overflow-hidden">
+                      <button
+                        type="button"
+                        onClick={() => setShowCalInstructions(!showCalInstructions)}
+                        className="w-full flex items-center justify-between px-4 py-3 text-sm text-dark-300 hover:text-white transition-colors"
+                      >
+                        <span className="font-medium">How to get service account credentials</span>
+                        {showCalInstructions ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                      </button>
+                      {showCalInstructions && (
+                        <ol className="px-4 pb-4 space-y-2 text-sm text-dark-300 list-decimal list-inside">
+                          <li>Go to <span className="text-primary-400">console.cloud.google.com</span> and create or select a project.</li>
+                          <li>Enable the <span className="text-white font-medium">Google Calendar API</span>.</li>
+                          <li>Go to <span className="text-white font-medium">IAM &amp; Admin → Service Accounts</span> and create a service account.</li>
+                          <li>Click the account → <span className="text-white font-medium">Keys → Add Key → JSON</span>. Download the file.</li>
+                          <li>Open Google Calendar → <span className="text-white font-medium">Settings → Share with specific people</span>. Add the service account email with <span className="text-white font-medium">"Make changes to events"</span>.</li>
+                          <li>Paste the downloaded JSON file contents below.</li>
+                        </ol>
+                      )}
+                    </div>
+
+                    <form onSubmit={handleCalSave} className="space-y-4">
+                      <div>
+                        <label className="block text-sm font-medium text-dark-300 mb-2">Service Account JSON</label>
+                        <textarea
+                          value={calJson}
+                          onChange={(e) => setCalJson(e.target.value)}
+                          placeholder={'{\n  "type": "service_account",\n  "project_id": "...",\n  ...\n}'}
+                          className="input font-mono text-xs h-40 resize-none"
+                          required
+                          spellCheck={false}
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-dark-300 mb-2">Label (Optional)</label>
+                        <input
+                          type="text"
+                          value={calLabel}
+                          onChange={(e) => setCalLabel(e.target.value)}
+                          placeholder="e.g., Work Calendar"
+                          className="input"
+                        />
+                      </div>
+                      <button type="submit" disabled={calSaving} className="btn-primary disabled:opacity-50">
+                        {calSaving ? 'Connecting...' : 'Connect with Service Account'}
+                      </button>
+                    </form>
+                  </div>
                 )}
               </div>
-
-              <form onSubmit={handleCalSave} className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-dark-300 mb-2">
-                    Service Account JSON
-                  </label>
-                  <textarea
-                    value={calJson}
-                    onChange={(e) => setCalJson(e.target.value)}
-                    placeholder={'{\n  "type": "service_account",\n  "project_id": "...",\n  "private_key": "...",\n  ...\n}'}
-                    className="input font-mono text-xs h-48 resize-none"
-                    required
-                    spellCheck={false}
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-dark-300 mb-2">
-                    Label (Optional)
-                  </label>
-                  <input
-                    type="text"
-                    value={calLabel}
-                    onChange={(e) => setCalLabel(e.target.value)}
-                    placeholder="e.g., Work Calendar"
-                    className="input"
-                  />
-                </div>
-                <div className="flex space-x-3">
-                  <button type="submit" disabled={calSaving} className="btn-primary disabled:opacity-50">
-                    {calSaving ? 'Connecting...' : 'Connect Calendar'}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => { setShowCalForm(false); setCalJson(''); setCalLabel(''); }}
-                    className="btn-secondary"
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </form>
             </div>
           )}
 

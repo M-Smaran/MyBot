@@ -52,4 +52,4 @@ export interface LLMProvider {
   ): Promise<LLMResponse>;
 }
 
-export type ProviderType = 'openai' | 'anthropic' | 'gemini' | 'kimi' | 'together';
+export type ProviderType = 'openai' | 'anthropic' | 'gemini' | 'kimi' | 'together' | 'groq';

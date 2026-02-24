@@ -1,7 +1,10 @@
 /**
  * Google Calendar Client
  *
- * Uses the Google Calendar REST API directly via fetch + service account JWT auth.
+ * Supports two auth modes:
+ *  1. Service Account (JWT) — server-to-server, requires sharing calendar with service account email
+ *  2. OAuth 2.0 — user grants access via Google consent screen (like Claude does)
+ *
  * No googleapis npm package required — only Node.js built-ins (crypto) and fetch.
  */
 
@@ -64,25 +67,43 @@ export interface UpdateEventInput {
   attendeeEmails?: string[];
 }
 
-// ── Service account state ────────────────────────────────────────────────────
+// ── Auth mode state ──────────────────────────────────────────────────────────
 
+type AuthMode = 'service_account' | 'oauth' | null;
+
+let authMode: AuthMode = null;
+let cachedToken: string | null = null;
+let tokenExpiry = 0;
+
+// Service account state
 interface ServiceAccount {
   client_email: string;
   private_key: string;
   private_key_id?: string;
 }
-
 let serviceAccount: ServiceAccount | null = null;
-let cachedToken: string | null = null;
-let tokenExpiry = 0;
+
+// OAuth state
+interface OAuthTokens {
+  accessToken: string;
+  refreshToken: string;
+  clientId: string;
+  clientSecret: string;
+}
+let oauthTokens: OAuthTokens | null = null;
 
 export function isCalendarInitialized(): boolean {
-  return serviceAccount !== null;
+  return authMode !== null;
 }
 
+export function getCalendarAuthMode(): AuthMode {
+  return authMode;
+}
+
+// ── Initializers ─────────────────────────────────────────────────────────────
+
 /**
- * Load service account credentials from the JSON string.
- * Call this at server startup and after saving new credentials.
+ * Initialize with a service account JSON string.
  */
 export async function initializeGoogleCalendar(serviceAccountJson: string): Promise<void> {
   try {
@@ -95,27 +116,80 @@ export async function initializeGoogleCalendar(serviceAccountJson: string): Prom
       private_key: parsed.private_key,
       private_key_id: parsed.private_key_id,
     };
-    // Reset cached token so the next request gets a fresh one
+    oauthTokens = null;
+    authMode = 'service_account';
     cachedToken = null;
     tokenExpiry = 0;
-    logger.info(`Google Calendar initialised for ${serviceAccount.client_email}`);
+    logger.info(`Google Calendar initialised (service account) for ${serviceAccount.client_email}`);
   } catch (err: any) {
     serviceAccount = null;
+    authMode = null;
     throw new Error(`Invalid service account JSON: ${err.message}`);
   }
 }
 
-// ── JWT / OAuth helpers ──────────────────────────────────────────────────────
+/**
+ * Initialize with stored OAuth tokens.
+ */
+export function initializeGoogleCalendarOAuth(
+  accessToken: string,
+  refreshToken: string,
+  clientId: string,
+  clientSecret: string
+): void {
+  oauthTokens = { accessToken, refreshToken, clientId, clientSecret };
+  serviceAccount = null;
+  authMode = 'oauth';
+  cachedToken = accessToken;
+  // OAuth tokens may be expired — set expiry to now so first call refreshes
+  tokenExpiry = 0;
+  logger.info('Google Calendar initialised (OAuth)');
+}
+
+// ── JWT / OAuth token helpers ─────────────────────────────────────────────────
 
 function base64url(input: Buffer | string): string {
   const buf = typeof input === 'string' ? Buffer.from(input) : input;
   return buf.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
 }
 
+async function refreshOAuthToken(): Promise<string> {
+  if (!oauthTokens) throw new Error('OAuth tokens not initialised');
+
+  const res = await fetch(TOKEN_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      grant_type: 'refresh_token',
+      refresh_token: oauthTokens.refreshToken,
+      client_id: oauthTokens.clientId,
+      client_secret: oauthTokens.clientSecret,
+    }),
+  });
+
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`Failed to refresh OAuth token: ${err}`);
+  }
+
+  const data: any = await res.json();
+  oauthTokens.accessToken = data.access_token;
+  cachedToken = data.access_token;
+  tokenExpiry = Math.floor(Date.now() / 1000) + (data.expires_in || 3600);
+  logger.info('OAuth token refreshed');
+  return cachedToken!;
+}
+
 async function getAccessToken(): Promise<string> {
   const now = Math.floor(Date.now() / 1000);
-  if (cachedToken && tokenExpiry > now + 60) return cachedToken;
 
+  if (authMode === 'oauth') {
+    if (cachedToken && tokenExpiry > now + 60) return cachedToken;
+    return refreshOAuthToken();
+  }
+
+  // Service account path
+  if (cachedToken && tokenExpiry > now + 60) return cachedToken;
   if (!serviceAccount) throw new Error('Google Calendar not initialised');
 
   const header = base64url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }));
@@ -180,7 +254,7 @@ async function calRequest(
     body: body ? JSON.stringify(body) : undefined,
   });
 
-  if (res.status === 204) return null; // DELETE responses
+  if (res.status === 204) return null;
 
   const data = await res.json() as any;
   if (!res.ok) {
@@ -254,7 +328,6 @@ export async function createEvent(input: CreateEventInput): Promise<CalendarEven
 export async function updateEvent(input: UpdateEventInput): Promise<CalendarEvent> {
   const calendarId = input.calendarId || 'primary';
 
-  // Fetch existing first so we only patch changed fields
   const existing = await getEvent(input.eventId, calendarId);
   const patch: any = { ...existing };
 

@@ -1,21 +1,21 @@
 /**
- * Together.ai Provider Adapter
+ * Groq Provider Adapter
  *
- * Together.ai uses an OpenAI-compatible API
+ * Groq uses an OpenAI-compatible API and serves Llama models with fast inference.
  */
 
 import OpenAI from 'openai';
 import type { LLMProvider, LLMMessage, LLMTool, LLMResponse } from '../types.js';
 
-export class TogetherProvider implements LLMProvider {
-  name = 'Together';
+export class GroqProvider implements LLMProvider {
+  name = 'Groq';
   private client: OpenAI;
   private model: string;
 
-  constructor(apiKey: string, model: string = 'meta-llama/Llama-3.3-70B-Instruct-Turbo') {
+  constructor(apiKey: string, model: string = 'llama-3.3-70b-versatile') {
     this.client = new OpenAI({
       apiKey,
-      baseURL: 'https://api.together.ai/v1',
+      baseURL: 'https://api.groq.com/openai/v1',
     });
     this.model = model;
   }

@@ -45,7 +45,16 @@ export const api = {
 
   // ── Calendar ────────────────────────────────────────────────────────────────
 
-  async getCalendarStatus(): Promise<{ configured: boolean; label: string | null; createdAt: number | null }> {
+  async getGoogleAuthUrl(): Promise<{ url: string }> {
+    const res = await fetch(`${API_BASE}/auth/google`);
+    if (!res.ok) {
+      const error = await res.json();
+      throw new Error(error.error || 'Failed to get Google auth URL');
+    }
+    return res.json();
+  },
+
+  async getCalendarStatus(): Promise<{ configured: boolean; authType: string | null; label: string | null; email: string | null; createdAt: number | null }> {
     const res = await fetch(`${API_BASE}/settings/calendar`);
     if (!res.ok) throw new Error('Failed to get calendar status');
     return res.json();

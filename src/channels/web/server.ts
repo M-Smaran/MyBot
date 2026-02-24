@@ -11,6 +11,7 @@ import cors from 'cors';
 import { config } from '../../config/index.js';
 import { createModuleLogger } from '../../utils/logger.js';
 import settingsRoutes from './routes/settings.js';
+import authRoutes from './routes/auth.js';
 import { processWebMessage } from './web-adapter.js';
 import { hasActiveLLMProvider } from './llm/client-factory.js';
 
@@ -38,6 +39,7 @@ app.get('/api/health', (req, res) => {
 
 // Mount routes
 app.use('/api/settings', settingsRoutes);
+app.use('/api/auth', authRoutes);
 
 // WebSocket connection handler
 wss.on('connection', (ws: WebSocket) => {
@@ -130,13 +132,24 @@ export async function startWebServer(): Promise<void> {
   try {
     const { getCalendarCredential } = await import('../../memory/database.js');
     const { decryptAPIKey } = await import('./encryption.js');
-    const { initializeGoogleCalendar } = await import('../../tools/calendar/google-calendar.js');
+    const { initializeGoogleCalendar, initializeGoogleCalendarOAuth } = await import('../../tools/calendar/google-calendar.js');
 
     const cred = getCalendarCredential('google');
     if (cred) {
       const json = decryptAPIKey(cred.encryptedCredentials, cred.encryptionIv);
-      await initializeGoogleCalendar(json);
-      logger.info('Google Calendar credentials loaded from database');
+      if (cred.authType === 'oauth') {
+        const tokens = JSON.parse(json);
+        initializeGoogleCalendarOAuth(
+          tokens.access_token,
+          tokens.refresh_token,
+          tokens.client_id,
+          tokens.client_secret
+        );
+        logger.info(`Google Calendar (OAuth) loaded from database for ${cred.oauthEmail}`);
+      } else {
+        await initializeGoogleCalendar(json);
+        logger.info('Google Calendar (service account) credentials loaded from database');
+      }
     }
   } catch (err: any) {
     logger.warn(`Could not load calendar credentials: ${err.message}`);

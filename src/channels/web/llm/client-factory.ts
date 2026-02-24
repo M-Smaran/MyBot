@@ -11,6 +11,7 @@ import { AnthropicProvider } from './providers/anthropic-provider.js';
 import { GeminiProvider } from './providers/gemini-provider.js';
 import { KimiProvider } from './providers/kimi-provider.js';
 import { TogetherProvider } from './providers/together-provider.js';
+import { GroqProvider } from './providers/groq-provider.js';
 import type { LLMProvider, ProviderType } from './types.js';
 import { createModuleLogger } from '../../../utils/logger.js';
 
@@ -55,6 +56,9 @@ export async function getActiveLLMClient(): Promise<LLMProvider> {
 
     case 'together':
       return new TogetherProvider(apiKey);
+
+    case 'groq':
+      return new GroqProvider(apiKey);
 
     default:
       throw new Error(`Unsupported provider: ${provider}`);

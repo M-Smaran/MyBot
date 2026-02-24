@@ -60,7 +60,7 @@ router.post('/api-keys', (req, res) => {
     }
 
     // Validate provider
-    const validProviders = ['openai', 'anthropic', 'gemini', 'kimi', 'together'];
+    const validProviders = ['openai', 'anthropic', 'gemini', 'kimi', 'together', 'groq'];
     if (!validProviders.includes(provider)) {
       return res.status(400).json({ error: `Invalid provider. Must be one of: ${validProviders.join(', ')}` });
     }
@@ -154,7 +154,9 @@ router.get('/calendar', (req, res) => {
     const cred = getCalendarCredential('google');
     res.json({
       configured: !!cred,
+      authType: cred?.authType || null,
       label: cred?.label || null,
+      email: cred?.oauthEmail || null,
       createdAt: cred?.createdAt || null,
     });
   } catch (error: any) {
