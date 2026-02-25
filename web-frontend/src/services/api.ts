@@ -78,6 +78,32 @@ export const api = {
     if (!res.ok) throw new Error('Failed to remove calendar credentials');
   },
 
+  // ── Cal.com ──────────────────────────────────────────────────────────────────
+
+  async getCalcomStatus(): Promise<{ configured: boolean; label: string | null; createdAt: number | null }> {
+    const res = await fetch(`${API_BASE}/settings/calcom`);
+    if (!res.ok) throw new Error('Failed to get Cal.com status');
+    return res.json();
+  },
+
+  async saveCalcomCredentials(apiKey: string, label?: string): Promise<{ success: boolean; label: string }> {
+    const res = await fetch(`${API_BASE}/settings/calcom`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ apiKey, label }),
+    });
+    if (!res.ok) {
+      const error = await res.json();
+      throw new Error(error.error || 'Failed to save Cal.com credentials');
+    }
+    return res.json();
+  },
+
+  async deleteCalcomCredentials(): Promise<void> {
+    const res = await fetch(`${API_BASE}/settings/calcom`, { method: 'DELETE' });
+    if (!res.ok) throw new Error('Failed to remove Cal.com credentials');
+  },
+
   // ── Document Upload ──────────────────────────────────────────────────────────
 
   async uploadDocument(file: File): Promise<{ success: boolean; fileName: string; size: number }> {

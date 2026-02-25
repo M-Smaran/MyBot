@@ -197,6 +197,7 @@ export async function startWebServer(): Promise<void> {
     const { getCalendarCredential } = await import('../../memory/database.js');
     const { decryptAPIKey } = await import('./encryption.js');
     const { initializeGoogleCalendar, initializeGoogleCalendarOAuth } = await import('../../tools/calendar/google-calendar.js');
+    const { initializeCalcom } = await import('../../tools/calendar/calcom-client.js');
 
     const cred = getCalendarCredential('google');
     if (cred) {
@@ -214,6 +215,13 @@ export async function startWebServer(): Promise<void> {
         await initializeGoogleCalendar(json);
         logger.info('Google Calendar (service account) credentials loaded from database');
       }
+    }
+
+    const calcomCred = getCalendarCredential('calcom');
+    if (calcomCred) {
+      const key = decryptAPIKey(calcomCred.encryptedCredentials, calcomCred.encryptionIv);
+      initializeCalcom(key);
+      logger.info('Cal.com client loaded from database');
     }
   } catch (err: any) {
     logger.warn(`Could not load calendar credentials: ${err.message}`);

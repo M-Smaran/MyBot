@@ -17,6 +17,7 @@ import {
 import { encryptAPIKey, maskAPIKey } from '../encryption.js';
 import { createModuleLogger } from '../../../utils/logger.js';
 import { initializeGoogleCalendar } from '../../../tools/calendar/google-calendar.js';
+import { initializeCalcom, resetCalcom, listEventTypes } from '../../../tools/calendar/calcom-client.js';
 
 const router = Router();
 const logger = createModuleLogger('settings-routes');
@@ -228,6 +229,74 @@ router.delete('/calendar', (req, res) => {
   } catch (error: any) {
     logger.error('Failed to delete calendar credentials', { error: error.message });
     res.status(500).json({ error: 'Failed to delete calendar credentials' });
+  }
+});
+
+// ============================================
+// Cal.com Credential Routes
+// ============================================
+
+/**
+ * GET /api/settings/calcom
+ * Returns whether Cal.com is configured
+ */
+router.get('/calcom', (req, res) => {
+  try {
+    const cred = getCalendarCredential('calcom');
+    res.json({
+      configured: !!cred,
+      label: cred?.label || null,
+      createdAt: cred?.createdAt || null,
+    });
+  } catch (error: any) {
+    logger.error('Failed to get Cal.com status', { error: error.message });
+    res.status(500).json({ error: 'Failed to get Cal.com status' });
+  }
+});
+
+/**
+ * POST /api/settings/calcom
+ * Save Cal.com API key
+ */
+router.post('/calcom', async (req, res) => {
+  try {
+    const { apiKey, label } = req.body;
+
+    if (!apiKey) {
+      return res.status(400).json({ error: 'apiKey is required' });
+    }
+
+    // Test the key by fetching event types
+    try {
+      initializeCalcom(apiKey);
+      await listEventTypes();
+    } catch (err: any) {
+      return res.status(400).json({ error: `Invalid Cal.com API key: ${err.message}` });
+    }
+
+    const { encrypted, iv } = encryptAPIKey(apiKey);
+    saveCalendarCredential(encrypted, iv, label || 'Cal.com', 'calcom');
+
+    logger.info('Cal.com API key saved');
+    res.json({ success: true, label: label || 'Cal.com' });
+  } catch (error: any) {
+    logger.error('Failed to save Cal.com credentials', { error: error.message });
+    res.status(500).json({ error: 'Failed to save Cal.com credentials' });
+  }
+});
+
+/**
+ * DELETE /api/settings/calcom
+ * Remove Cal.com credentials
+ */
+router.delete('/calcom', (req, res) => {
+  try {
+    resetCalcom();
+    const deleted = deleteCalendarCredential('calcom');
+    res.json({ success: deleted });
+  } catch (error: any) {
+    logger.error('Failed to delete Cal.com credentials', { error: error.message });
+    res.status(500).json({ error: 'Failed to delete Cal.com credentials' });
   }
 });
 

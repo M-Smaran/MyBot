@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Plus, Trash2, Check, Key, Calendar, ChevronDown, ChevronUp, AlertCircle, ExternalLink } from 'lucide-react';
+import { Plus, Trash2, Check, Key, Calendar, ChevronDown, ChevronUp, AlertCircle, ExternalLink, Link } from 'lucide-react';
 import { api } from '../services/api';
 import type { APIKey } from '../types';
 
@@ -37,6 +37,15 @@ export function SettingsPage() {
   const [calSaving, setCalSaving] = useState(false);
   const [oauthConnecting, setOauthConnecting] = useState(false);
 
+  // ── Cal.com ────────────────────────────────────────────────────────────────
+  const [calcomStatus, setCalcomStatus] = useState<{ configured: boolean; label: string | null; createdAt: number | null }>({ configured: false, label: null, createdAt: null });
+  const [calcomLoading, setCalcomLoading] = useState(true);
+  const [showCalcomForm, setShowCalcomForm] = useState(false);
+  const [showCalcomInstructions, setShowCalcomInstructions] = useState(false);
+  const [calcomApiKey, setCalcomApiKey] = useState('');
+  const [calcomLabel, setCalcomLabel] = useState('');
+  const [calcomSaving, setCalcomSaving] = useState(false);
+
   // ── Shared ─────────────────────────────────────────────────────────────────
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
@@ -44,6 +53,7 @@ export function SettingsPage() {
   useEffect(() => {
     loadKeys();
     loadCalendarStatus();
+    loadCalcomStatus();
 
     // Handle OAuth redirect result (?calendar=connected or ?calendar=error)
     const params = new URLSearchParams(window.location.search);
@@ -152,6 +162,48 @@ export function SettingsPage() {
       await api.deleteCalendarCredentials();
       setSuccess('Google Calendar disconnected.');
       await loadCalendarStatus();
+    } catch (err: any) { setError(err.message); }
+  };
+
+  // ── Cal.com handlers ───────────────────────────────────────────────────────
+
+  const loadCalcomStatus = async () => {
+    try {
+      setCalcomLoading(true);
+      const status = await api.getCalcomStatus();
+      setCalcomStatus(status);
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setCalcomLoading(false);
+    }
+  };
+
+  const handleCalcomSave = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(''); setSuccess('');
+    setCalcomSaving(true);
+    try {
+      await api.saveCalcomCredentials(calcomApiKey.trim(), calcomLabel || undefined);
+      setSuccess('Cal.com connected successfully!');
+      setCalcomApiKey('');
+      setCalcomLabel('');
+      setShowCalcomForm(false);
+      await loadCalcomStatus();
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setCalcomSaving(false);
+    }
+  };
+
+  const handleCalcomDelete = async () => {
+    if (!confirm('Disconnect Cal.com? The assistant will lose Cal.com access.')) return;
+    setError(''); setSuccess('');
+    try {
+      await api.deleteCalcomCredentials();
+      setSuccess('Cal.com disconnected.');
+      await loadCalcomStatus();
     } catch (err: any) { setError(err.message); }
   };
 
@@ -436,6 +488,139 @@ export function SettingsPage() {
               </ul>
               <p className="text-xs text-dark-500 mt-3">
                 Try asking: "What's on my calendar this week?" or "Book a meeting tomorrow at 2pm"
+              </p>
+            </div>
+          )}
+        </section>
+
+        {/* ── Section 3: Cal.com ──────────────────────────────────────────── */}
+        <section>
+          <div className="flex items-center space-x-3 mb-4">
+            <Link className="w-6 h-6 text-primary-500" />
+            <h2 className="text-xl font-semibold">Cal.com</h2>
+          </div>
+          <p className="text-dark-400 text-sm mb-4">
+            Connect your Cal.com account so the AI assistant can manage bookings, check availability, and schedule appointments through your Cal.com booking pages.
+          </p>
+
+          {/* Status card */}
+          {calcomLoading ? (
+            <div className="card text-center text-dark-400">Loading...</div>
+          ) : calcomStatus.configured ? (
+            <div className="card border-green-700 mb-4">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center space-x-3">
+                  <Check className="w-5 h-5 text-green-400" />
+                  <div>
+                    <div className="font-medium text-green-400">Connected</div>
+                    {calcomStatus.label && <div className="text-sm text-dark-300">{calcomStatus.label}</div>}
+                    {calcomStatus.createdAt && (
+                      <div className="text-xs text-dark-500">
+                        Connected {new Date(calcomStatus.createdAt * 1000).toLocaleDateString()}
+                      </div>
+                    )}
+                  </div>
+                </div>
+                <button onClick={handleCalcomDelete} className="text-primary-500 hover:text-primary-400 transition-colors" title="Disconnect">
+                  <Trash2 className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="card border-dark-600 mb-4">
+              <div className="flex items-center space-x-3 text-dark-400">
+                <Link className="w-5 h-5" />
+                <span>Cal.com not connected</span>
+              </div>
+            </div>
+          )}
+
+          {/* Connect form */}
+          {!calcomStatus.configured && !showCalcomForm && (
+            <button onClick={() => setShowCalcomForm(true)} className="btn-primary flex items-center space-x-2">
+              <Plus className="w-5 h-5" />
+              <span>Connect Cal.com</span>
+            </button>
+          )}
+
+          {showCalcomForm && (
+            <div className="card">
+              <h3 className="text-lg font-semibold mb-4 flex items-center space-x-2">
+                <Link className="w-5 h-5 text-primary-500" />
+                <span>Add Cal.com API Key</span>
+              </h3>
+
+              {/* Instructions */}
+              <div className="mb-4 bg-dark-800 rounded-lg overflow-hidden">
+                <button
+                  type="button"
+                  onClick={() => setShowCalcomInstructions(!showCalcomInstructions)}
+                  className="w-full flex items-center justify-between px-4 py-3 text-sm text-dark-300 hover:text-white transition-colors"
+                >
+                  <span className="font-medium">How to get your Cal.com API key</span>
+                  {showCalcomInstructions ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                </button>
+                {showCalcomInstructions && (
+                  <ol className="px-4 pb-4 space-y-2 text-sm text-dark-300 list-decimal list-inside">
+                    <li>Go to <span className="text-primary-400">cal.com</span> and sign in to your account.</li>
+                    <li>Navigate to <span className="text-white font-medium">Settings → Developer → API Keys</span>.</li>
+                    <li>Click <span className="text-white font-medium">Add</span> to generate a new API key.</li>
+                    <li>Copy the key and paste it below.</li>
+                  </ol>
+                )}
+              </div>
+
+              <form onSubmit={handleCalcomSave} className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-dark-300 mb-2">API Key</label>
+                  <input
+                    type="password"
+                    value={calcomApiKey}
+                    onChange={(e) => setCalcomApiKey(e.target.value)}
+                    placeholder="cal_live_..."
+                    className="input font-mono"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-dark-300 mb-2">Label (Optional)</label>
+                  <input
+                    type="text"
+                    value={calcomLabel}
+                    onChange={(e) => setCalcomLabel(e.target.value)}
+                    placeholder="e.g., My Cal.com"
+                    className="input"
+                  />
+                </div>
+                <div className="flex space-x-3">
+                  <button type="submit" disabled={calcomSaving} className="btn-primary disabled:opacity-50">
+                    {calcomSaving ? 'Connecting...' : 'Connect Cal.com'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { setShowCalcomForm(false); setCalcomApiKey(''); setCalcomLabel(''); }}
+                    className="btn-secondary"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </form>
+            </div>
+          )}
+
+          {/* What the agent can do */}
+          {calcomStatus.configured && (
+            <div className="mt-4 p-4 bg-dark-800 rounded-lg">
+              <p className="text-sm font-medium text-dark-300 mb-2">The assistant can now:</p>
+              <ul className="text-sm text-dark-400 space-y-1 list-disc list-inside">
+                <li>List your Cal.com event types (booking pages)</li>
+                <li>Check available slots for any event type</li>
+                <li>Create new bookings for attendees</li>
+                <li>Cancel existing bookings</li>
+                <li>Reschedule bookings to a new time</li>
+              </ul>
+              <p className="text-xs text-dark-500 mt-3">
+                Try asking: "What event types do I have on Cal.com?" or "Check availability for my 30-min call this week"
               </p>
             </div>
           )}

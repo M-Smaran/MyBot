@@ -2,7 +2,7 @@
  * Web Message Processor
  *
  * Processes messages from the web interface using user-configured LLM providers.
- * Supports a full tool-call loop so the agent can use calendar tools.
+ * Supports a full tool-call loop so the agent can use calendar and Cal.com tools.
  */
 
 import { createModuleLogger } from '../../utils/logger.js';
@@ -11,19 +11,25 @@ import type { AgentContext, AgentResponse } from '../../agents/agent.js';
 import { getActiveLLMClient } from './llm/client-factory.js';
 import type { LLMMessage } from './llm/types.js';
 import { CALENDAR_TOOLS, executeCalendarTool, isCalendarTool } from '../../tools/calendar/calendar-tools.js';
+import { CALCOM_TOOLS, executeCalcomTool, isCalcomTool } from '../../tools/calendar/calcom-tools.js';
 import { retrieve, buildContextString, shouldUseRAG } from '../../rag/index.js';
 
 const logger = createModuleLogger('web-processor');
 
+// Combine all available tools into a single array passed to the LLM
+const ALL_TOOLS = [...CALENDAR_TOOLS, ...CALCOM_TOOLS];
+
 const SYSTEM_PROMPT = `You are mybot, a helpful AI assistant with access to:
-- Google Calendar tools (for scheduling and availability)
+- Google Calendar tools (for Google Calendar scheduling and availability)
+- Cal.com tools (for Cal.com booking management — list event types, check availability, book, cancel, reschedule)
 - A semantic search index that may contain uploaded documents or past content.
 
 When the user asks about:
-- Calendar, scheduling, availability, or appointments → use the appropriate calendar tool.
-- Topics that might relate to uploaded or indexed content → FIRST try using the semantic search context you are given (if any) before answering.
+- Google Calendar, scheduling, or appointments → use the google calendar tools.
+- Cal.com bookings, event types, or scheduling links → use the calcom_ tools.
+- Topics that might relate to uploaded or indexed content → use the semantic search context if provided.
 
-Always answer helpfully and concisely, and clearly separate what comes from calendar tools vs. what comes from document/context search when relevant.`;
+Always answer helpfully and concisely.`;
 
 /**
  * Process a web message using the active LLM provider.
@@ -86,19 +92,13 @@ export async function processWebMessage(
     });
   }
 
-  // Provide current server date/time so the LLM can answer date questions reliably
-  messages.push({
-    role: 'system',
-    content: `Current server date/time is ${new Date().toISOString()} (ISO 8601).`,
-  });
-
   for (const msg of history.slice(-20)) {
     messages.push({ role: msg.role as 'user' | 'assistant', content: msg.content });
   }
 
-  // Initial LLM call with calendar tools
-  logger.info(`Calling LLM with ${messages.length} messages and ${CALENDAR_TOOLS.length} tools`);
-  let response = await llmProvider.chatCompletion(messages, CALENDAR_TOOLS, { maxTokens: 4096 });
+  // Initial LLM call with all tools
+  logger.info(`Calling LLM with ${messages.length} messages and ${ALL_TOOLS.length} tools`);
+  let response = await llmProvider.chatCompletion(messages, ALL_TOOLS, { maxTokens: 4096 });
 
   // Tool call loop — keep looping while the model wants to call tools
   let iterations = 0;
@@ -108,15 +108,12 @@ export async function processWebMessage(
     iterations++;
     logger.info(`Tool call iteration ${iterations}: ${response.tool_calls.map(tc => tc.function.name).join(', ')}`);
 
-    // Add the assistant's tool-calling response to the conversation
-    // (tool_calls is needed by providers like Anthropic to reconstruct tool_use blocks)
     messages.push({
       role: 'assistant',
       content: response.content ?? null,
       tool_calls: response.tool_calls,
     });
 
-    // Execute each tool call and add results
     for (const toolCall of response.tool_calls) {
       let result: string;
 
@@ -125,6 +122,8 @@ export async function processWebMessage(
 
         if (isCalendarTool(toolCall.function.name)) {
           result = await executeCalendarTool(toolCall.function.name, args);
+        } else if (isCalcomTool(toolCall.function.name)) {
+          result = await executeCalcomTool(toolCall.function.name, args);
         } else {
           result = `Unknown tool: ${toolCall.function.name}`;
         }
@@ -142,8 +141,7 @@ export async function processWebMessage(
       });
     }
 
-    // Call the LLM again with the tool results
-    response = await llmProvider.chatCompletion(messages, CALENDAR_TOOLS, { maxTokens: 4096 });
+    response = await llmProvider.chatCompletion(messages, ALL_TOOLS, { maxTokens: 4096 });
   }
 
   const content = response.content || 'I was unable to generate a response. Please try again.';
