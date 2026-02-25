@@ -1,7 +1,8 @@
 import { useState, useRef, useEffect } from 'react';
-import { Send, Trash2, Database, Brain, Loader2, MessageSquare } from 'lucide-react';
+import { Send, Trash2, Database, Brain, Loader2, MessageSquare, Paperclip } from 'lucide-react';
 import { useWebSocket } from '../hooks/useWebSocket';
 import type { Message } from '../types';
+import { api } from '../services/api';
 
 function MessageBubble({ message }: { message: Message }) {
   const isUser = message.role === 'user';
@@ -43,9 +44,11 @@ function MessageBubble({ message }: { message: Message }) {
 }
 
 export function ChatPage() {
-  const { messages, isConnected, isTyping, sendMessage, clearMessages } = useWebSocket();
+  const { messages, isConnected, isTyping, sendMessage, clearMessages, addSystemMessage } = useWebSocket();
   const [input, setInput] = useState('');
+  const [isUploading, setIsUploading] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -57,6 +60,41 @@ export function ChatPage() {
 
     sendMessage(input.trim());
     setInput('');
+  };
+
+  const handleUploadClick = () => {
+    if (!isConnected || isUploading) return;
+    fileInputRef.current?.click();
+  };
+
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    try {
+      setIsUploading(true);
+      await api.uploadDocument(file);
+      // Read file locally so the user can see its contents in the chat interface
+      const reader = new FileReader();
+      reader.onload = () => {
+        const text = typeof reader.result === 'string' ? reader.result : '';
+        addSystemMessage(
+          `📄 Uploaded document "${file.name}" (${file.size} bytes):\n\n` +
+          (text ? text : '(Unable to preview file contents)')
+        );
+      };
+      reader.onerror = () => {
+        addSystemMessage(`📄 Uploaded document "${file.name}" (${file.size} bytes). (Preview failed)`);
+      };
+      reader.readAsText(file);
+    } catch (error: any) {
+      addSystemMessage(`❌ Failed to upload document "${file.name}": ${error.message || 'Unknown error'}`);
+    } finally {
+      setIsUploading(false);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+    }
   };
 
   return (
@@ -114,7 +152,26 @@ export function ChatPage() {
 
       {/* Input */}
       <div className="border-t border-dark-700 p-4">
-        <form onSubmit={handleSubmit} className="flex space-x-2">
+        <form onSubmit={handleSubmit} className="flex space-x-2 items-center">
+          <input
+            type="file"
+            ref={fileInputRef}
+            className="hidden"
+            onChange={handleFileChange}
+          />
+          <button
+            type="button"
+            onClick={handleUploadClick}
+            disabled={!isConnected || isUploading}
+            className="p-2 rounded-lg border border-dark-600 text-dark-300 hover:text-white hover:border-primary-500 hover:bg-dark-700 disabled:opacity-50 disabled:cursor-not-allowed"
+            title={isUploading ? 'Uploading...' : 'Upload document for RAG'}
+          >
+            {isUploading ? (
+              <Loader2 className="w-5 h-5 animate-spin" />
+            ) : (
+              <Paperclip className="w-5 h-5" />
+            )}
+          </button>
           <input
             type="text"
             value={input}

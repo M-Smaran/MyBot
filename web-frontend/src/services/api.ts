@@ -77,4 +77,29 @@ export const api = {
     const res = await fetch(`${API_BASE}/settings/calendar`, { method: 'DELETE' });
     if (!res.ok) throw new Error('Failed to remove calendar credentials');
   },
+
+  // ── Document Upload ──────────────────────────────────────────────────────────
+
+  async uploadDocument(file: File): Promise<{ success: boolean; fileName: string; size: number }> {
+    const formData = new FormData();
+    formData.append('file', file);
+
+    const res = await fetch(`${API_BASE}/upload`, {
+      method: 'POST',
+      body: formData,
+    });
+
+    if (!res.ok) {
+      let message = 'Failed to upload document';
+      try {
+        const err = await res.json();
+        if (err.error) message = err.error;
+      } catch {
+        // ignore JSON parse errors
+      }
+      throw new Error(message);
+    }
+
+    return res.json();
+  },
 };

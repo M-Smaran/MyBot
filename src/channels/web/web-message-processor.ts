@@ -11,21 +11,19 @@ import type { AgentContext, AgentResponse } from '../../agents/agent.js';
 import { getActiveLLMClient } from './llm/client-factory.js';
 import type { LLMMessage } from './llm/types.js';
 import { CALENDAR_TOOLS, executeCalendarTool, isCalendarTool } from '../../tools/calendar/calendar-tools.js';
+import { retrieve, buildContextString, shouldUseRAG } from '../../rag/index.js';
 
 const logger = createModuleLogger('web-processor');
 
-const SYSTEM_PROMPT = `You are mybot, a helpful AI assistant with access to Google Calendar tools.
+const SYSTEM_PROMPT = `You are mybot, a helpful AI assistant with access to:
+- Google Calendar tools (for scheduling and availability)
+- A semantic search index that may contain uploaded documents or past content.
 
-You can:
-- View upcoming events and appointments
-- Check availability / free-busy status
-- Book new appointments
-- Update or reschedule existing appointments
-- Cancel appointments
+When the user asks about:
+- Calendar, scheduling, availability, or appointments → use the appropriate calendar tool.
+- Topics that might relate to uploaded or indexed content → FIRST try using the semantic search context you are given (if any) before answering.
 
-When the user asks about calendar, scheduling, availability, or appointments, use the appropriate calendar tool. Always confirm details with the user before booking or cancelling.
-
-For non-calendar questions, answer helpfully and concisely.`;
+Always answer helpfully and concisely, and clearly separate what comes from calendar tools vs. what comes from document/context search when relevant.`;
 
 /**
  * Process a web message using the active LLM provider.
@@ -43,12 +41,56 @@ export async function processWebMessage(
   // Persist user message
   addMessage(context.sessionId, 'user', userMessage);
 
+  // Optional RAG context from uploaded / indexed content
+  let ragContext = '';
+  let ragUsed = false;
+  let sourcesCount = 0;
+
+  if (shouldUseRAG(userMessage)) {
+    logger.info('RAG triggered for web query');
+    try {
+      const results = await retrieve(userMessage, {
+        limit: 10,
+        minScore: 0.4,
+      });
+
+      if (results.results.length > 0) {
+        ragContext = buildContextString(results.results);
+        ragUsed = true;
+        sourcesCount = results.results.length;
+        logger.info(`RAG found ${sourcesCount} relevant documents for web query`);
+      }
+    } catch (error: any) {
+      logger.error(`Web RAG retrieval failed: ${error.message}`);
+    }
+  }
+
   // Get the configured LLM provider
   const llmProvider = await getActiveLLMClient();
 
   // Build the messages array from history
   const history = getSessionHistory(context.sessionId);
   const messages: LLMMessage[] = [{ role: 'system', content: SYSTEM_PROMPT }];
+
+  // Provide current server date/time so the LLM can answer date questions reliably
+  messages.push({
+    role: 'system',
+    content: `Current server date/time is ${new Date().toISOString()} (ISO 8601).`,
+  });
+
+  // Add RAG context if available
+  if (ragContext) {
+    messages.push({
+      role: 'system',
+      content: `The following context from uploaded or indexed documents may be relevant to the user's question:\n\n${ragContext}`,
+    });
+  }
+
+  // Provide current server date/time so the LLM can answer date questions reliably
+  messages.push({
+    role: 'system',
+    content: `Current server date/time is ${new Date().toISOString()} (ISO 8601).`,
+  });
 
   for (const msg of history.slice(-20)) {
     messages.push({ role: msg.role as 'user' | 'assistant', content: msg.content });
@@ -112,8 +154,8 @@ export async function processWebMessage(
   return {
     content,
     shouldThread: false,
-    ragUsed: false,
-    sourcesCount: 0,
+    ragUsed,
+    sourcesCount,
     memoryUsed: false,
     memoriesCount: 0,
   };

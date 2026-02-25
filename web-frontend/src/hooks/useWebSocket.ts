@@ -101,11 +101,22 @@ export function useWebSocket() {
     sessionIdRef.current = null;
   }, []);
 
+  const addSystemMessage = useCallback((content: string) => {
+    const msg: Message = {
+      id: Date.now().toString(),
+      role: 'assistant',
+      content,
+      timestamp: new Date(),
+    };
+    setMessages(prev => [...prev, msg]);
+  }, []);
+
   return {
     messages,
     isConnected,
     isTyping,
     sendMessage,
     clearMessages,
+    addSystemMessage,
   };
 }

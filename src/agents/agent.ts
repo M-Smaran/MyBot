@@ -690,6 +690,12 @@ export async function processMessage(
     { role: 'system', content: SYSTEM_PROMPT },
   ];
 
+  // Add current server date/time so the LLM can answer time-based questions accurately
+  messages.push({
+    role: 'system',
+    content: `Current server date/time is ${new Date().toISOString()} (ISO 8601).`,
+  });
+
   // Add memory context if available
   if (memoryContext) {
     messages.push({ 

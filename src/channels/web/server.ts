@@ -8,12 +8,16 @@ import express from 'express';
 import { createServer } from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
 import cors from 'cors';
+import multer from 'multer';
+import { existsSync, mkdirSync } from 'fs';
+import { join } from 'path';
 import { config } from '../../config/index.js';
 import { createModuleLogger } from '../../utils/logger.js';
 import settingsRoutes from './routes/settings.js';
 import authRoutes from './routes/auth.js';
 import { processWebMessage } from './web-adapter.js';
 import { hasActiveLLMProvider } from './llm/client-factory.js';
+import { createEmbedding, preprocessText, addDocuments, type Document, type DocumentMetadata } from '../../rag/index.js';
 
 const logger = createModuleLogger('web-server');
 
@@ -21,12 +25,72 @@ const app = express();
 const httpServer = createServer(app);
 const wss = new WebSocketServer({ server: httpServer });
 
+// Ensure uploads directory exists
+const uploadsDir = join(process.cwd(), 'data', 'uploads');
+if (!existsSync(uploadsDir)) {
+  mkdirSync(uploadsDir, { recursive: true });
+}
+
+// File upload middleware (stores files on disk)
+const upload = multer({ dest: uploadsDir });
+
 // Middleware
 app.use(cors({
   origin: config.web.corsOrigins,
   credentials: true,
 }));
 app.use(express.json());
+
+// Document upload endpoint for RAG
+app.post('/api/upload', upload.single('file'), async (req, res) => {
+  try {
+    const file = req.file;
+    if (!file) {
+      return res.status(400).json({ error: 'No file uploaded' });
+    }
+
+    // Read file contents as UTF-8 text
+    const { readFile } = await import('fs/promises');
+    const rawText = await readFile(file.path, 'utf-8');
+    const text = preprocessText(rawText);
+
+    if (!text || text.length < 20) {
+      return res.status(400).json({ error: 'File does not contain enough text to index' });
+    }
+
+    // Create embedding and store as a RAG document
+    const embedding = await createEmbedding(text);
+    const nowIso = new Date().toISOString();
+
+    const metadata: DocumentMetadata = {
+      channelId: 'uploads',
+      channelName: 'uploads',
+      userId: 'upload',
+      userName: 'Uploaded Document',
+      timestamp: nowIso,
+      messageTs: file.filename,
+      indexedAt: nowIso,
+    };
+
+    const doc: Document = {
+      id: `upload:${file.filename}`,
+      text,
+      embedding,
+      metadata,
+    };
+
+    await addDocuments([doc]);
+
+    return res.json({
+      success: true,
+      fileName: file.originalname,
+      size: file.size,
+    });
+  } catch (error: any) {
+    logger.error('File upload failed', { error: error.message });
+    return res.status(500).json({ error: 'Failed to process uploaded document' });
+  }
+});
 
 // Health check endpoint
 app.get('/api/health', (req, res) => {
