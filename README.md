@@ -35,7 +35,7 @@ MyBot is a full-stack AI assistant that runs locally. It combines:
 | **AI Providers** | Anthropic, OpenAI, Gemini, Kimi, Together.ai | Pluggable LLM backends |
 | **RAG** | ChromaDB + OpenAI embeddings | Semantic search over indexed content |
 | **Memory** | mem0.ai cloud | Long-term user memory across sessions |
-| **Calendar** | Google Calendar API | Event management via AI |
+| **Calendar** | Google Calendar API + Cal.com | Event management and scheduling via AI |
 | **MCP** | GitHub + Notion MCP servers | External tool integration (optional) |
 | **Slack** | Slack Bolt.js (Socket Mode) | Slack channel/DM integration (optional) |
 
@@ -73,8 +73,9 @@ Add your own API key in Settings and switch between:
 - User-controlled: view, add, or delete memories
 
 ### Calendar Integration
-- Google Calendar read/write via AI commands
-- List upcoming events, create events, check availability
+- **Google Calendar** — list calendars, get events, book/update/cancel appointments, check free/busy
+- Two auth modes: **OAuth 2.0** (user login via Google consent screen) or **Service Account** (JWT)
+- **Cal.com** — list event types, check availability, create/cancel/reschedule bookings
 - Natural language calendar management
 
 ### MCP (Model Context Protocol) — Optional
@@ -138,14 +139,18 @@ Add your own API key in Settings and switch between:
 Browser
   │
   ├── HTTP REST → Express server (port 3001)
-  │   ├── GET  /api/settings        → list API keys
-  │   ├── POST /api/settings/keys   → add API key
-  │   ├── PUT  /api/settings/active → set active key
-  │   └── GET  /api/settings/models → list models
+  │   ├── GET  /api/health                    → health check
+  │   ├── GET  /api/settings                  → list API keys
+  │   ├── POST /api/settings/keys             → add API key
+  │   ├── PUT  /api/settings/active           → set active key
+  │   ├── GET  /api/settings/models           → list models
+  │   ├── POST /api/upload                    → upload document to RAG index
+  │   ├── GET  /api/auth/google               → get Google OAuth consent URL
+  │   └── GET  /api/auth/google/callback      → OAuth token exchange & save
   │
   └── WebSocket (ws://) → processMessage()
-      ├── Incoming: { message, sessionId }
-      └── Outgoing: { content, type, metadata }
+      ├── Incoming: { type: "chat", content, sessionId }
+      └── Outgoing: { type: "message"|"status"|"error", content, metadata }
 ```
 
 ### Message Processing Flow
@@ -300,6 +305,18 @@ These are used only if no API key is set via the Settings UI:
 | `MEM0_API_KEY` | — | mem0.ai cloud API key |
 | `MEMORY_EXTRACTION_MODEL` | `gpt-4o-mini` | Model for fact extraction |
 
+### Google Calendar OAuth (Optional)
+
+Required only if connecting Google Calendar via the OAuth flow in Settings:
+
+| Variable | Description |
+|----------|-------------|
+| `GOOGLE_CLIENT_ID` | Google OAuth 2.0 client ID |
+| `GOOGLE_CLIENT_SECRET` | Google OAuth 2.0 client secret |
+| `GOOGLE_REDIRECT_URI` | OAuth callback URL (default: `http://localhost:3001/api/auth/google/callback`) |
+
+Leave empty to use Service Account auth instead (upload JSON key in Settings).
+
 ### Slack (Optional)
 
 | Variable | Description |
@@ -372,15 +389,27 @@ API keys are managed through the Settings page in the web UI — no `.env` chang
 | `forget_about` | Delete specific memories |
 | `forget_everything` | Delete all memories for user |
 
-### Calendar Tools (Google Calendar)
+### Google Calendar Tools
 
 | Tool | Description |
 |------|-------------|
-| `list_events` | List upcoming calendar events |
-| `create_event` | Create a new event |
-| `update_event` | Update an existing event |
-| `delete_event` | Delete an event |
-| `get_availability` | Check free/busy time |
+| `list_calendars` | List all calendars the assistant has access to |
+| `get_calendar_events` | Get events within a date range |
+| `check_availability` | Check free/busy slots for one or more calendars |
+| `book_appointment` | Create a new event (supports attendees, timezone, location) |
+| `update_appointment` | Reschedule or edit an existing event |
+| `cancel_appointment` | Delete an event and optionally notify attendees |
+
+### Cal.com Tools
+
+| Tool | Description |
+|------|-------------|
+| `calcom_list_event_types` | List all Cal.com booking pages with IDs and durations |
+| `calcom_list_bookings` | List bookings filtered by status (upcoming/past/cancelled) |
+| `calcom_check_availability` | Get available time slots for a given event type |
+| `calcom_create_booking` | Book a time slot for an attendee |
+| `calcom_cancel_booking` | Cancel an existing booking |
+| `calcom_reschedule_booking` | Move a booking to a new time slot |
 
 ### GitHub Tools via MCP (26 tools)
 
@@ -427,7 +456,8 @@ MyBot/
 │   │       ├── web-message-processor.ts
 │   │       ├── encryption.ts         # API key encryption
 │   │       ├── routes/
-│   │       │   └── settings.ts       # Settings REST routes
+│   │       │   ├── settings.ts       # Settings REST routes (API keys)
+│   │       │   └── auth.ts           # Google OAuth callback routes
 │   │       └── llm/
 │   │           ├── client-factory.ts # Selects provider by active key
 │   │           ├── types.ts
@@ -459,8 +489,10 @@ MyBot/
 │   │   ├── slack-actions.ts          # Slack API wrappers
 │   │   ├── scheduler.ts              # Task scheduler (node-cron)
 │   │   └── calendar/
-│   │       ├── calendar-tools.ts     # Calendar tool definitions
-│   │       └── google-calendar.ts    # Google Calendar API client
+│   │       ├── calendar-tools.ts     # Google Calendar tool definitions + executor
+│   │       ├── google-calendar.ts    # Google Calendar API client (OAuth + Service Account)
+│   │       ├── calcom-tools.ts       # Cal.com tool definitions + executor
+│   │       └── calcom-client.ts      # Cal.com API client
 │   └── utils/
 │       └── logger.ts                 # Winston logger
 │
@@ -506,6 +538,27 @@ MyBot/
 ---
 
 ## Optional Integrations
+
+### Enable Google Calendar (OAuth)
+
+1. Go to [console.cloud.google.com](https://console.cloud.google.com) → APIs & Services → Credentials
+2. Create an **OAuth 2.0 Client ID** (Web application)
+3. Add `http://localhost:3001/api/auth/google/callback` as an authorised redirect URI
+4. Set in `.env`:
+   ```env
+   GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
+   GOOGLE_CLIENT_SECRET=GOCSPX-...
+   GOOGLE_REDIRECT_URI=http://localhost:3001/api/auth/google/callback
+   ```
+5. In Settings → Calendar, click **Connect Google Calendar** to complete the OAuth flow
+
+Alternatively, upload a **Service Account JSON** key directly in Settings (no env vars needed).
+
+### Enable Cal.com
+
+1. Go to [app.cal.com/settings/developer/api-keys](https://app.cal.com/settings/developer/api-keys)
+2. Create an API key
+3. In Settings → Calendar, paste the Cal.com API key
 
 ### Enable Slack
 
