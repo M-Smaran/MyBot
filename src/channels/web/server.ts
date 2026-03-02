@@ -17,7 +17,28 @@ import settingsRoutes from './routes/settings.js';
 import authRoutes from './routes/auth.js';
 import { processWebMessage } from './web-adapter.js';
 import { hasActiveLLMProvider } from './llm/client-factory.js';
-import { createEmbedding, preprocessText, addDocuments, type Document, type DocumentMetadata } from '../../rag/index.js';
+import { createEmbeddings, preprocessText, addDocuments, type Document, type DocumentMetadata } from '../../rag/index.js';
+
+/**
+ * Split text into overlapping chunks for better RAG retrieval.
+ * Each chunk gets its own embedding so specific queries can match
+ * the relevant part of a large document.
+ */
+function chunkText(text: string, chunkWords = 400, overlapWords = 50): string[] {
+  const words = text.split(/\s+/).filter(w => w.length > 0);
+  if (words.length <= chunkWords) return [text];
+
+  const chunks: string[] = [];
+  let start = 0;
+  while (start < words.length) {
+    const end = Math.min(start + chunkWords, words.length);
+    const chunk = words.slice(start, end).join(' ');
+    if (chunk.length >= 20) chunks.push(chunk);
+    if (end >= words.length) break;
+    start += chunkWords - overlapWords;
+  }
+  return chunks.length > 0 ? chunks : [text];
+}
 
 const logger = createModuleLogger('web-server');
 
@@ -58,33 +79,39 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
       return res.status(400).json({ error: 'File does not contain enough text to index' });
     }
 
-    // Create embedding and store as a RAG document
-    const embedding = await createEmbedding(text);
+    // Split into chunks so specific queries can match relevant sections
+    const chunks = chunkText(text);
+    logger.info(`Splitting "${file.originalname}" into ${chunks.length} chunk(s) for indexing`);
+
+    // Batch-embed all chunks in one API call
+    const embeddings = await createEmbeddings(chunks);
     const nowIso = new Date().toISOString();
 
-    const metadata: DocumentMetadata = {
-      channelId: 'uploads',
-      channelName: 'uploads',
-      userId: 'upload',
-      userName: 'Uploaded Document',
-      timestamp: nowIso,
-      messageTs: file.filename,
-      indexedAt: nowIso,
-    };
+    const docs: Document[] = chunks.map((chunk, i) => {
+      const metadata: DocumentMetadata = {
+        channelId: 'uploads',
+        channelName: 'uploads',
+        userId: 'upload',
+        userName: file.originalname,
+        timestamp: nowIso,
+        messageTs: `${file.filename}-chunk-${i}`,
+        indexedAt: nowIso,
+      };
+      return {
+        id: `upload:${file.filename}:${i}`,
+        text: chunk,
+        embedding: embeddings[i],
+        metadata,
+      };
+    });
 
-    const doc: Document = {
-      id: `upload:${file.filename}`,
-      text,
-      embedding,
-      metadata,
-    };
-
-    await addDocuments([doc]);
+    await addDocuments(docs);
 
     return res.json({
       success: true,
       fileName: file.originalname,
       size: file.size,
+      chunks: chunks.length,
     });
   } catch (error: any) {
     logger.error('File upload failed', { error: error.message });

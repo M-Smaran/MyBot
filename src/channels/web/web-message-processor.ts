@@ -12,7 +12,7 @@ import { getActiveLLMClient } from './llm/client-factory.js';
 import type { LLMMessage } from './llm/types.js';
 import { CALENDAR_TOOLS, executeCalendarTool, isCalendarTool } from '../../tools/calendar/calendar-tools.js';
 import { CALCOM_TOOLS, executeCalcomTool, isCalcomTool } from '../../tools/calendar/calcom-tools.js';
-import { retrieve, buildContextString, shouldUseRAG } from '../../rag/index.js';
+import { retrieve, buildContextString } from '../../rag/index.js';
 
 const logger = createModuleLogger('web-processor');
 
@@ -22,12 +22,12 @@ const ALL_TOOLS = [...CALENDAR_TOOLS, ...CALCOM_TOOLS];
 const SYSTEM_PROMPT = `You are mybot, a helpful AI assistant with access to:
 - Google Calendar tools (for Google Calendar scheduling and availability)
 - Cal.com tools (for Cal.com booking management — list event types, check availability, book, cancel, reschedule)
-- A semantic search index that may contain uploaded documents or past content.
+- A document knowledge base (uploaded files that have been indexed for semantic search)
 
 When the user asks about:
 - Google Calendar, scheduling, or appointments → use the google calendar tools.
 - Cal.com bookings, event types, or scheduling links → use the calcom_ tools.
-- Topics that might relate to uploaded or indexed content → use the semantic search context if provided.
+- Anything about uploaded documents, files, or knowledge base content → look for a system message labeled "Relevant Document Context" and answer DIRECTLY from that content. Do NOT say you cannot access documents — the content is already provided to you in the context.
 
 Always answer helpfully and concisely.`;
 
@@ -47,28 +47,25 @@ export async function processWebMessage(
   // Persist user message
   addMessage(context.sessionId, 'user', userMessage);
 
-  // Optional RAG context from uploaded / indexed content
+  // Always attempt RAG for web queries — uploaded documents should always be searchable
   let ragContext = '';
   let ragUsed = false;
   let sourcesCount = 0;
 
-  if (shouldUseRAG(userMessage)) {
-    logger.info('RAG triggered for web query');
-    try {
-      const results = await retrieve(userMessage, {
-        limit: 10,
-        minScore: 0.4,
-      });
+  try {
+    const results = await retrieve(userMessage, {
+      limit: 10,
+      minScore: 0.2,
+    });
 
-      if (results.results.length > 0) {
-        ragContext = buildContextString(results.results);
-        ragUsed = true;
-        sourcesCount = results.results.length;
-        logger.info(`RAG found ${sourcesCount} relevant documents for web query`);
-      }
-    } catch (error: any) {
-      logger.error(`Web RAG retrieval failed: ${error.message}`);
+    if (results.results.length > 0) {
+      ragContext = buildContextString(results.results);
+      ragUsed = true;
+      sourcesCount = results.results.length;
+      logger.info(`RAG found ${sourcesCount} relevant documents for web query`);
     }
+  } catch (error: any) {
+    logger.warn(`Web RAG retrieval skipped: ${error.message}`);
   }
 
   // Get the configured LLM provider
@@ -88,7 +85,7 @@ export async function processWebMessage(
   if (ragContext) {
     messages.push({
       role: 'system',
-      content: `The following context from uploaded or indexed documents may be relevant to the user's question:\n\n${ragContext}`,
+      content: `## Relevant Document Context\n\nThe following content was retrieved from your indexed documents and is directly relevant to the user's question. Answer using this content:\n\n${ragContext}`,
     });
   }
 
