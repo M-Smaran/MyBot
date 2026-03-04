@@ -3,6 +3,12 @@ export interface Message {
   role: 'user' | 'assistant';
   content: string;
   timestamp: Date;
+  type?: 'upload';
+  uploadInfo?: {
+    fileName: string;
+    fileSize: number;
+    chunks: number;
+  };
   metadata?: {
     ragUsed?: boolean;
     sourcesCount?: number;

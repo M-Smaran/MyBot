@@ -10,12 +10,14 @@ import { WebSocketServer, WebSocket } from 'ws';
 import cors from 'cors';
 import multer from 'multer';
 import { existsSync, mkdirSync } from 'fs';
-import { join } from 'path';
+import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
 import { config } from '../../config/index.js';
 import { createModuleLogger } from '../../utils/logger.js';
 import settingsRoutes from './routes/settings.js';
 import authRoutes from './routes/auth.js';
 import { processWebMessage } from './web-adapter.js';
+import { getSessionHistory, getWebSessions } from '../../memory/database.js';
 import { hasActiveLLMProvider } from './llm/client-factory.js';
 import { createEmbeddings, preprocessText, addDocuments, type Document, type DocumentMetadata } from '../../rag/index.js';
 
@@ -119,6 +121,25 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
   }
 });
 
+// List all web sessions
+app.get('/api/sessions', (_req, res) => {
+  try {
+    res.json({ sessions: getWebSessions() });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Chat history endpoint
+app.get('/api/history/:sessionId', (req, res) => {
+  try {
+    const messages = getSessionHistory(req.params.sessionId, 100);
+    res.json({ messages });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Health check endpoint
 app.get('/api/health', (req, res) => {
   res.json({
@@ -131,6 +152,20 @@ app.get('/api/health', (req, res) => {
 // Mount routes
 app.use('/api/settings', settingsRoutes);
 app.use('/api/auth', authRoutes);
+
+// Serve built frontend in production
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const frontendDist = join(__dirname, '../../../web-frontend/dist');
+if (existsSync(frontendDist)) {
+  app.use(express.static(frontendDist));
+  // SPA fallback — all non-API routes serve index.html
+  app.get('*', (req, res) => {
+    if (!req.path.startsWith('/api')) {
+      res.sendFile(join(frontendDist, 'index.html'));
+    }
+  });
+  logger.info('Serving built frontend from ' + frontendDist);
+}
 
 // WebSocket connection handler
 wss.on('connection', (ws: WebSocket) => {

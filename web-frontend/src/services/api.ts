@@ -104,9 +104,25 @@ export const api = {
     if (!res.ok) throw new Error('Failed to remove Cal.com credentials');
   },
 
+  // ── Chat History ─────────────────────────────────────────────────────────────
+
+  async getSessions(): Promise<{ id: string; title: string; lastActivity: number; messageCount: number }[]> {
+    const res = await fetch(`${API_BASE}/sessions`);
+    if (!res.ok) throw new Error('Failed to get sessions');
+    const data = await res.json();
+    return data.sessions;
+  },
+
+  async getHistory(sessionId: string): Promise<{ role: string; content: string; createdAt: number }[]> {
+    const res = await fetch(`${API_BASE}/history/${sessionId}`);
+    if (!res.ok) throw new Error('Failed to get history');
+    const data = await res.json();
+    return data.messages;
+  },
+
   // ── Document Upload ──────────────────────────────────────────────────────────
 
-  async uploadDocument(file: File): Promise<{ success: boolean; fileName: string; size: number }> {
+  async uploadDocument(file: File): Promise<{ success: boolean; fileName: string; size: number; chunks: number }> {
     const formData = new FormData();
     formData.append('file', file);
 

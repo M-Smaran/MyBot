@@ -83,7 +83,15 @@ async function calRequest(
 
   if (res.status === 204) return null;
 
-  const data = await res.json() as any;
+  const text = await res.text();
+  let data: any;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    // Cal.com returned HTML (e.g. 404 page or gateway error)
+    throw new Error(`Cal.com API error ${res.status}: unexpected HTML response. Check your API key and parameters.`);
+  }
+
   if (!res.ok) {
     throw new Error(data?.message || data?.error || `Cal.com API error ${res.status}`);
   }
@@ -135,7 +143,7 @@ export async function getAvailableSlots(
   endTime: string,
   timeZone?: string
 ): Promise<{ date: string; slots: string[] }[]> {
-  const data = await calRequest('GET', '/slots/available', undefined, {
+  const data = await calRequest('GET', '/slots', undefined, {
     eventTypeId,
     startTime,
     endTime,

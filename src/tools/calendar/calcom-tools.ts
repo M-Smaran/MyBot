@@ -71,7 +71,7 @@ export const CALCOM_TOOLS: LLMTool[] = [
     type: 'function',
     function: {
       name: 'calcom_check_availability',
-      description: 'Check available time slots for a Cal.com event type within a date range. Returns available slots grouped by date.',
+      description: 'Check available time slots for a Cal.com event type within a date range. Returns available slots grouped by date. IMPORTANT: You must first call calcom_list_event_types to get a valid eventTypeId before calling this tool.',
       parameters: {
         type: 'object',
         properties: {

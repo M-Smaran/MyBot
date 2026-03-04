@@ -1,15 +1,43 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import type { Message, WSMessage } from '../types';
+import { api } from '../services/api';
+
+const SESSION_KEY = 'mybot_session_id';
 
 export function useWebSocket() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [isConnected, setIsConnected] = useState(false);
   const [isTyping, setIsTyping] = useState(false);
+  const [currentSessionId, setCurrentSessionId] = useState<string | null>(localStorage.getItem(SESSION_KEY));
   const wsRef = useRef<WebSocket | null>(null);
-  const sessionIdRef = useRef<string | null>(null);
+  const sessionIdRef = useRef<string | null>(localStorage.getItem(SESSION_KEY));
+
+  // Load history from server when the hook mounts
+  useEffect(() => {
+    const savedSessionId = localStorage.getItem(SESSION_KEY);
+    if (!savedSessionId) return;
+
+    api.getHistory(savedSessionId).then(history => {
+      if (history.length === 0) return;
+      const loaded: Message[] = history
+        .filter(m => m.role === 'user' || m.role === 'assistant')
+        .map((m, i) => ({
+          id: `history-${i}`,
+          role: m.role as 'user' | 'assistant',
+          content: m.content,
+          timestamp: new Date(m.createdAt * 1000),
+        }));
+      setMessages(loaded);
+    }).catch(() => {
+      localStorage.removeItem(SESSION_KEY);
+      sessionIdRef.current = null;
+    });
+  }, []);
 
   useEffect(() => {
-    const ws = new WebSocket('ws://localhost:3001');
+    const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsHost = import.meta.env.VITE_WS_URL || `${wsProtocol}//${window.location.host}`;
+    const ws = new WebSocket(wsHost);
     wsRef.current = ws;
 
     ws.onopen = () => {
@@ -36,6 +64,8 @@ export function useWebSocket() {
 
           if (data.sessionId) {
             sessionIdRef.current = data.sessionId;
+            setCurrentSessionId(data.sessionId);
+            localStorage.setItem(SESSION_KEY, data.sessionId);
           }
         } else if (data.type === 'status') {
           if (data.content === 'typing') {
@@ -79,7 +109,6 @@ export function useWebSocket() {
       return;
     }
 
-    // Add user message to UI immediately
     const userMessage: Message = {
       id: Date.now().toString(),
       role: 'user',
@@ -88,7 +117,6 @@ export function useWebSocket() {
     };
     setMessages(prev => [...prev, userMessage]);
 
-    // Send to server
     wsRef.current.send(JSON.stringify({
       type: 'chat',
       content,
@@ -99,6 +127,25 @@ export function useWebSocket() {
   const clearMessages = useCallback(() => {
     setMessages([]);
     sessionIdRef.current = null;
+    setCurrentSessionId(null);
+    localStorage.removeItem(SESSION_KEY);
+  }, []);
+
+  // Load a specific past session by ID
+  const loadSession = useCallback(async (sessionId: string) => {
+    const history = await api.getHistory(sessionId);
+    const loaded: Message[] = history
+      .filter(m => m.role === 'user' || m.role === 'assistant')
+      .map((m, i) => ({
+        id: `history-${sessionId}-${i}`,
+        role: m.role as 'user' | 'assistant',
+        content: m.content,
+        timestamp: new Date(m.createdAt * 1000),
+      }));
+    setMessages(loaded);
+    sessionIdRef.current = sessionId;
+    setCurrentSessionId(sessionId);
+    localStorage.setItem(SESSION_KEY, sessionId);
   }, []);
 
   const addSystemMessage = useCallback((content: string) => {
@@ -111,12 +158,27 @@ export function useWebSocket() {
     setMessages(prev => [...prev, msg]);
   }, []);
 
+  const addUploadMessage = useCallback((fileName: string, fileSize: number, chunks: number) => {
+    const msg: Message = {
+      id: Date.now().toString(),
+      role: 'assistant',
+      content: '',
+      type: 'upload',
+      uploadInfo: { fileName, fileSize, chunks },
+      timestamp: new Date(),
+    };
+    setMessages(prev => [...prev, msg]);
+  }, []);
+
   return {
     messages,
     isConnected,
     isTyping,
+    currentSessionId,
     sendMessage,
     clearMessages,
+    loadSession,
     addSystemMessage,
+    addUploadMessage,
   };
 }

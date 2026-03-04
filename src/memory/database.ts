@@ -225,9 +225,42 @@ export function ensureWebSession(sessionId: string): void {
   } else {
     db.prepare(`
       INSERT INTO sessions (id, user_id, channel_id, thread_ts, session_type)
-      VALUES (?, ?, NULL, NULL, 'dm')
+      VALUES (?, ?, NULL, NULL, 'web')
     `).run(sessionId, sessionId);
   }
+}
+
+export interface SessionSummary {
+  id: string;
+  title: string;
+  lastActivity: number;
+  messageCount: number;
+}
+
+export function getWebSessions(): SessionSummary[] {
+  const rows = db.prepare(`
+    SELECT
+      s.id,
+      s.last_activity AS lastActivity,
+      COUNT(m.id) AS messageCount,
+      MIN(CASE WHEN m.role = 'user' THEN m.content END) AS firstUserMessage
+    FROM sessions s
+    LEFT JOIN messages m ON m.session_id = s.id
+    WHERE s.session_type = 'web' OR (s.channel_id IS NULL AND s.user_id = s.id)
+    GROUP BY s.id
+    HAVING messageCount > 0
+    ORDER BY s.last_activity DESC
+    LIMIT 50
+  `).all() as any[];
+
+  return rows.map(r => ({
+    id: r.id,
+    title: r.firstUserMessage
+      ? (r.firstUserMessage as string).slice(0, 50)
+      : 'New chat',
+    lastActivity: r.lastActivity,
+    messageCount: r.messageCount,
+  }));
 }
 
 export function getSession(sessionId: string): Session | null {
