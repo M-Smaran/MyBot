@@ -70,4 +70,53 @@ export class OpenAIProvider implements LLMProvider {
       finish_reason: choice.finish_reason || undefined,
     };
   }
+
+  async streamChatCompletion(
+    messages: LLMMessage[],
+    options?: { maxTokens?: number; temperature?: number },
+    onChunk?: (chunk: string) => void
+  ): Promise<string> {
+    const openaiMessages = messages.map(msg => {
+      if (msg.role === 'tool') {
+        return {
+          role: 'tool' as const,
+          content: msg.content ?? '',
+          tool_call_id: msg.tool_call_id!,
+        };
+      }
+      if (msg.role === 'assistant' && msg.tool_calls && msg.tool_calls.length > 0) {
+        return {
+          role: 'assistant' as const,
+          content: msg.content,
+          tool_calls: msg.tool_calls.map(tc => ({
+            id: tc.id,
+            type: 'function' as const,
+            function: { name: tc.function.name, arguments: tc.function.arguments },
+          })),
+        };
+      }
+      return {
+        role: msg.role as 'system' | 'user' | 'assistant',
+        content: msg.content ?? '',
+      };
+    });
+
+    let full = '';
+    const stream = await this.client.chat.completions.create({
+      model: this.model,
+      messages: openaiMessages as any,
+      max_tokens: options?.maxTokens || 1500,
+      temperature: options?.temperature,
+      stream: true,
+    });
+
+    for await (const chunk of stream) {
+      const text = chunk.choices[0]?.delta?.content ?? '';
+      if (text) {
+        full += text;
+        onChunk?.(text);
+      }
+    }
+    return full;
+  }
 }

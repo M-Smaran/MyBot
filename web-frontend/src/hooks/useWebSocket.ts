@@ -49,18 +49,45 @@ export function useWebSocket() {
       try {
         const data: WSMessage = JSON.parse(event.data);
 
-        if (data.type === 'message') {
+        if (data.type === 'stream_chunk') {
+          // Append token to the in-progress streaming message
           setIsTyping(false);
-          setMessages(prev => [
-            ...prev,
-            {
+          setMessages(prev => {
+            const last = prev[prev.length - 1];
+            if (last && last.id === '__streaming__') {
+              return [
+                ...prev.slice(0, -1),
+                { ...last, content: last.content + (data.content || '') },
+              ];
+            }
+            // First chunk — create a new streaming bubble
+            return [
+              ...prev,
+              {
+                id: '__streaming__',
+                role: 'assistant' as const,
+                content: data.content || '',
+                timestamp: new Date(),
+              },
+            ];
+          });
+        } else if (data.type === 'message') {
+          setIsTyping(false);
+          // Replace the streaming bubble (if any) with the final message + metadata
+          setMessages(prev => {
+            const last = prev[prev.length - 1];
+            const finalMsg = {
               id: Date.now().toString(),
-              role: 'assistant',
+              role: 'assistant' as const,
               content: data.content || '',
               timestamp: new Date(),
               metadata: data.metadata,
-            },
-          ]);
+            };
+            if (last && last.id === '__streaming__') {
+              return [...prev.slice(0, -1), finalMsg];
+            }
+            return [...prev, finalMsg];
+          });
 
           if (data.sessionId) {
             sessionIdRef.current = data.sessionId;

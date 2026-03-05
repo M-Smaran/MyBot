@@ -118,18 +118,18 @@ export const CALCOM_TOOLS: LLMTool[] = [
           },
           attendeeEmail: {
             type: 'string',
-            description: 'Email address of the person booking the appointment.',
+            description: 'Email address of the attendee. Optional — omit to use the Cal.com account email automatically.',
           },
           timeZone: {
             type: 'string',
-            description: 'IANA timezone for the attendee (e.g., America/New_York). Defaults to UTC.',
+            description: 'IANA timezone (e.g., Europe/Berlin). Defaults to Europe/Berlin (CET) if not specified.',
           },
           notes: {
             type: 'string',
             description: 'Optional notes or reason for the booking.',
           },
         },
-        required: ['eventTypeId', 'start', 'attendeeName', 'attendeeEmail'],
+        required: ['eventTypeId', 'start', 'attendeeName'],
       },
     },
   },
@@ -232,8 +232,8 @@ export async function executeCalcomTool(name: string, args: Record<string, any>)
           args.eventTypeId,
           args.start,
           args.attendeeName,
-          args.attendeeEmail,
-          args.timeZone || 'UTC',
+          args.attendeeEmail || undefined,
+          args.timeZone || 'Europe/Berlin',
           args.notes
         );
         return `Booking created successfully!\n${JSON.stringify({

@@ -27,7 +27,7 @@ export interface APIKey {
 }
 
 export interface WSMessage {
-  type: 'message' | 'error' | 'status';
+  type: 'message' | 'error' | 'status' | 'stream_chunk';
   content?: string;
   sessionId?: string;
   metadata?: {

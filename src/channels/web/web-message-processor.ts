@@ -26,7 +26,7 @@ const SYSTEM_PROMPT = `You are mybot, a helpful AI assistant with access to:
 
 When the user asks about:
 - Scheduling, availability, appointments, bookings, or meetings → use the calcom_ tools by default. ALWAYS call calcom_list_event_types first to get a valid eventTypeId before calling calcom_check_availability or calcom_create_booking.
-- If the user wants to BOOK an appointment and any of the required details are missing, ask them for the missing information BEFORE calling any tool. Required details are: (1) attendee full name, (2) attendee email, (3) preferred date and time, (4) meeting type or duration. Optional: timezone (default UTC), notes. Example prompt to user: "To book your appointment, please provide: your full name, email address, preferred date & time, and the meeting type (e.g. 30-minute call)."
+- If the user wants to BOOK an appointment and any required details are missing, ask BEFORE calling any tool. Required: (1) attendee full name, (2) preferred date and time, (3) meeting type or duration. Email is NOT required — the Cal.com account email is used automatically. Timezone defaults to CET (Europe/Berlin) — only ask if the user mentions a different timezone. Example prompt: "To book your appointment, please provide: your full name, preferred date & time, and the meeting type (e.g. 30-minute call)."
 - Google Calendar specifically → use the google calendar tools only when the user explicitly says "Google Calendar".
 - Anything about uploaded documents, files, or knowledge base content → look for a system message labeled "Relevant Document Context" and answer DIRECTLY from that content. Do NOT say you cannot access documents — the content is already provided to you in the context.
 
@@ -35,54 +35,50 @@ Always answer helpfully and concisely.`;
 /**
  * Process a web message using the active LLM provider.
  * Runs a tool-call loop so the model can chain multiple tool calls.
+ * onChunk is called for each streamed token in the final response.
  */
 export async function processWebMessage(
   userMessage: string,
-  context: AgentContext
+  context: AgentContext,
+  onChunk?: (chunk: string) => void
 ): Promise<AgentResponse> {
   logger.info(`Processing web message for session: ${context.sessionId}`);
 
-  // Ensure the session row exists (web sessions are not pre-created via getOrCreateSession)
+  // Ensure the session row exists
   ensureWebSession(context.sessionId);
 
   // Persist user message
   addMessage(context.sessionId, 'user', userMessage);
 
-  // Always attempt RAG for web queries — uploaded documents should always be searchable
+  // Run RAG retrieval and LLM client init in parallel
+  const [ragResult, llmProvider] = await Promise.all([
+    retrieve(userMessage, { limit: 5, minScore: 0.25 }).catch((err: any) => {
+      logger.warn(`Web RAG retrieval skipped: ${err.message}`);
+      return { results: [] };
+    }),
+    getActiveLLMClient(),
+  ]);
+
   let ragContext = '';
   let ragUsed = false;
   let sourcesCount = 0;
 
-  try {
-    const results = await retrieve(userMessage, {
-      limit: 10,
-      minScore: 0.2,
-    });
-
-    if (results.results.length > 0) {
-      ragContext = buildContextString(results.results);
-      ragUsed = true;
-      sourcesCount = results.results.length;
-      logger.info(`RAG found ${sourcesCount} relevant documents for web query`);
-    }
-  } catch (error: any) {
-    logger.warn(`Web RAG retrieval skipped: ${error.message}`);
+  if (ragResult.results.length > 0) {
+    ragContext = buildContextString(ragResult.results);
+    ragUsed = true;
+    sourcesCount = ragResult.results.length;
+    logger.info(`RAG found ${sourcesCount} relevant documents for web query`);
   }
 
-  // Get the configured LLM provider
-  const llmProvider = await getActiveLLMClient();
-
-  // Build the messages array from history
+  // Build the messages array from history (last 10 messages)
   const history = getSessionHistory(context.sessionId);
   const messages: LLMMessage[] = [{ role: 'system', content: SYSTEM_PROMPT }];
 
-  // Provide current server date/time so the LLM can answer date questions reliably
   messages.push({
     role: 'system',
     content: `Current server date/time is ${new Date().toISOString()} (ISO 8601).`,
   });
 
-  // Add RAG context if available
   if (ragContext) {
     messages.push({
       role: 'system',
@@ -90,15 +86,14 @@ export async function processWebMessage(
     });
   }
 
-  for (const msg of history.slice(-20)) {
+  for (const msg of history.slice(-10)) {
     messages.push({ role: msg.role as 'user' | 'assistant', content: msg.content });
   }
 
-  // Initial LLM call with all tools
+  // Tool call loop with regular (non-streaming) completions
   logger.info(`Calling LLM with ${messages.length} messages and ${ALL_TOOLS.length} tools`);
-  let response = await llmProvider.chatCompletion(messages, ALL_TOOLS, { maxTokens: 4096 });
+  let response = await llmProvider.chatCompletion(messages, ALL_TOOLS, { maxTokens: 1500 });
 
-  // Tool call loop — keep looping while the model wants to call tools
   let iterations = 0;
   const MAX_ITERATIONS = 10;
 
@@ -139,10 +134,19 @@ export async function processWebMessage(
       });
     }
 
-    response = await llmProvider.chatCompletion(messages, ALL_TOOLS, { maxTokens: 4096 });
+    response = await llmProvider.chatCompletion(messages, ALL_TOOLS, { maxTokens: 1500 });
   }
 
-  const content = response.content || 'I was unable to generate a response. Please try again.';
+  let content: string;
+
+  // Use streaming for the final text response if supported and a callback is provided
+  if (onChunk && llmProvider.streamChatCompletion) {
+    logger.info('Streaming final response');
+    content = await llmProvider.streamChatCompletion(messages, { maxTokens: 1500 }, onChunk);
+    if (!content) content = 'I was unable to generate a response. Please try again.';
+  } else {
+    content = response.content || 'I was unable to generate a response. Please try again.';
+  }
 
   // Persist assistant reply
   addMessage(context.sessionId, 'assistant', content);

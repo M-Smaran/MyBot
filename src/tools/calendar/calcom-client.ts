@@ -13,9 +13,11 @@ const CALCOM_BASE = 'https://api.cal.com/v1';
 // ── State ────────────────────────────────────────────────────────────────────
 
 let apiKey: string | null = null;
+let cachedEmail: string | null = null;
 
 export function initializeCalcom(key: string): void {
   apiKey = key;
+  cachedEmail = null; // reset cache on new key
   logger.info('Cal.com client initialized');
 }
 
@@ -25,6 +27,14 @@ export function isCalcomInitialized(): boolean {
 
 export function resetCalcom(): void {
   apiKey = null;
+  cachedEmail = null;
+}
+
+export async function getCalcomUserEmail(): Promise<string> {
+  if (cachedEmail) return cachedEmail;
+  const data = await calRequest('GET', '/me');
+  cachedEmail = data?.user?.email ?? data?.email ?? '';
+  return cachedEmail;
 }
 
 // ── Interfaces ───────────────────────────────────────────────────────────────
@@ -164,16 +174,19 @@ export async function createBooking(
   eventTypeId: number,
   start: string,
   attendeeName: string,
-  attendeeEmail: string,
-  timeZone: string = 'UTC',
+  attendeeEmail: string | undefined,
+  timeZone: string = 'Europe/Berlin',
   notes?: string
 ): Promise<CalcomBooking> {
+  // Fall back to the Cal.com account email if none provided
+  const email = attendeeEmail || await getCalcomUserEmail();
+
   const body: any = {
     eventTypeId,
     start,
     responses: {
       name: attendeeName,
-      email: attendeeEmail,
+      email,
       notes: notes || '',
     },
     timeZone,

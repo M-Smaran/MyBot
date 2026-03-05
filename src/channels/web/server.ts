@@ -195,16 +195,23 @@ wss.on('connection', (ws: WebSocket) => {
         }));
 
         try {
-          // Process the message
+          // Stream tokens to client as they arrive
+          const onChunk = (chunk: string) => {
+            if (ws.readyState === ws.OPEN) {
+              ws.send(JSON.stringify({ type: 'stream_chunk', content: chunk }));
+            }
+          };
+
           const { response, sessionId: newSessionId } = await processWebMessage(
             message.content,
-            sessionId || message.sessionId
+            sessionId || message.sessionId,
+            onChunk
           );
 
           // Update session ID
           sessionId = newSessionId;
 
-          // Send response
+          // Send final message_end with metadata (content already streamed)
           ws.send(JSON.stringify({
             type: 'message',
             content: response.content,

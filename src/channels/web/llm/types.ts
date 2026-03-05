@@ -50,6 +50,13 @@ export interface LLMProvider {
       temperature?: number;
     }
   ): Promise<LLMResponse>;
+
+  /** Stream a text-only final response (no tool calls). Calls onChunk per token. */
+  streamChatCompletion?(
+    messages: LLMMessage[],
+    options?: { maxTokens?: number; temperature?: number },
+    onChunk?: (chunk: string) => void
+  ): Promise<string>;
 }
 
 export type ProviderType = 'openai' | 'anthropic' | 'gemini' | 'kimi' | 'together' | 'groq';

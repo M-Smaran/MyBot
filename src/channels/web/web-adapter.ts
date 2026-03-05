@@ -31,7 +31,8 @@ export interface WebMessage {
  */
 export async function processWebMessage(
   userMessage: string,
-  sessionId?: string
+  sessionId?: string,
+  onChunk?: (chunk: string) => void
 ): Promise<{ response: AgentResponse; sessionId: string }> {
   // Generate session ID if not provided
   const webSessionId = sessionId || `web:${Date.now()}:${Math.random().toString(36).substr(2, 9)}`;
@@ -49,8 +50,7 @@ export async function processWebMessage(
   logger.info(`Processing web message in session: ${webSessionId}`);
 
   try {
-    // Use the dedicated web message processor
-    const response = await processWebMsg(userMessage, context);
+    const response = await processWebMsg(userMessage, context, onChunk);
 
     return {
       response,

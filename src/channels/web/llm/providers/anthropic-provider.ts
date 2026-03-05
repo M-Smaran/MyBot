@@ -120,4 +120,80 @@ export class AnthropicProvider implements LLMProvider {
       finish_reason: response.stop_reason || undefined,
     };
   }
+
+  async streamChatCompletion(
+    messages: LLMMessage[],
+    options?: { maxTokens?: number; temperature?: number },
+    onChunk?: (chunk: string) => void
+  ): Promise<string> {
+    const systemMessages = messages.filter(m => m.role === 'system').map(m => m.content).join('\n\n');
+    const nonSystemMessages = messages.filter(m => m.role !== 'system');
+
+    // Use same grouping logic as chatCompletion to properly handle tool messages
+    const anthropicMessages: any[] = [];
+    let i = 0;
+    while (i < nonSystemMessages.length) {
+      const msg = nonSystemMessages[i];
+
+      if (msg.role === 'assistant' && msg.tool_calls && msg.tool_calls.length > 0) {
+        const contentBlocks: any[] = [];
+        if (msg.content) contentBlocks.push({ type: 'text', text: msg.content });
+        for (const tc of msg.tool_calls) {
+          contentBlocks.push({
+            type: 'tool_use',
+            id: tc.id,
+            name: tc.function.name,
+            input: JSON.parse(tc.function.arguments),
+          });
+        }
+        anthropicMessages.push({ role: 'assistant', content: contentBlocks });
+
+        i++;
+        const toolResults: any[] = [];
+        while (i < nonSystemMessages.length && nonSystemMessages[i].role === 'tool') {
+          const toolMsg = nonSystemMessages[i];
+          toolResults.push({
+            type: 'tool_result',
+            tool_use_id: toolMsg.tool_call_id!,
+            content: toolMsg.content ?? '',
+          });
+          i++;
+        }
+        if (toolResults.length > 0) {
+          anthropicMessages.push({ role: 'user', content: toolResults });
+        }
+        continue;
+      }
+
+      if (msg.role === 'tool') {
+        anthropicMessages.push({
+          role: 'user',
+          content: [{ type: 'tool_result', tool_use_id: msg.tool_call_id!, content: msg.content ?? '' }],
+        });
+      } else {
+        anthropicMessages.push({
+          role: msg.role === 'assistant' ? ('assistant' as const) : ('user' as const),
+          content: msg.content ?? '',
+        });
+      }
+      i++;
+    }
+
+    let full = '';
+    const stream = this.client.messages.stream({
+      model: this.model,
+      system: systemMessages || undefined,
+      messages: anthropicMessages as any,
+      max_tokens: options?.maxTokens || 1500,
+      temperature: options?.temperature,
+    });
+
+    for await (const chunk of stream) {
+      if (chunk.type === 'content_block_delta' && chunk.delta.type === 'text_delta') {
+        full += chunk.delta.text;
+        onChunk?.(chunk.delta.text);
+      }
+    }
+    return full;
+  }
 }
