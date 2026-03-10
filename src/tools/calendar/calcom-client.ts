@@ -34,7 +34,7 @@ export async function getCalcomUserEmail(): Promise<string> {
   if (cachedEmail) return cachedEmail;
   const data = await calRequest('GET', '/me');
   cachedEmail = data?.user?.email ?? data?.email ?? '';
-  return cachedEmail;
+  return cachedEmail!;
 }
 
 // ── Interfaces ───────────────────────────────────────────────────────────────
@@ -147,24 +147,42 @@ export async function getBooking(bookingId: number): Promise<CalcomBooking> {
 /**
  * Check available slots for a given event type and date range.
  */
+const WORK_START_HOUR = 9;  // 09:00 Europe/Berlin
+const WORK_END_HOUR = 18;   // 18:00 Europe/Berlin
+
+function isWithinWorkingHours(isoTime: string): boolean {
+  const date = new Date(isoTime);
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Europe/Berlin',
+    hour: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(date);
+  const hour = parseInt(parts.find(p => p.type === 'hour')?.value ?? '0', 10);
+  return hour >= WORK_START_HOUR && hour < WORK_END_HOUR;
+}
+
 export async function getAvailableSlots(
   eventTypeId: number,
   startTime: string,
   endTime: string,
-  timeZone?: string
+  slotDuration?: number
 ): Promise<{ date: string; slots: string[] }[]> {
   const data = await calRequest('GET', '/slots', undefined, {
     eventTypeId,
     startTime,
     endTime,
-    timeZone: timeZone || 'UTC',
+    ...(slotDuration ? { duration: slotDuration } : {}),
   });
 
   const slots: Record<string, any[]> = data?.slots ?? {};
-  return Object.entries(slots).map(([date, daySlots]) => ({
-    date,
-    slots: daySlots.map((s: any) => s.time ?? s),
-  }));
+  return Object.entries(slots)
+    .map(([date, daySlots]) => ({
+      date,
+      slots: daySlots
+        .map((s: any) => s.time ?? s)
+        .filter(isWithinWorkingHours),
+    }))
+    .filter(d => d.slots.length > 0);
 }
 
 /**
@@ -178,6 +196,11 @@ export async function createBooking(
   timeZone: string = 'Europe/Berlin',
   notes?: string
 ): Promise<CalcomBooking> {
+  // Enforce working hours — reject bookings outside 09:00–18:00 Europe/Berlin
+  if (!isWithinWorkingHours(start)) {
+    throw new Error('Booking time is outside working hours (09:00–18:00 Europe/Berlin). Please choose a slot between 9 AM and 6 PM.');
+  }
+
   // Fall back to the Cal.com account email if none provided
   const email = attendeeEmail || await getCalcomUserEmail();
 

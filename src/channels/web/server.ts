@@ -46,7 +46,7 @@ const logger = createModuleLogger('web-server');
 
 const app = express();
 const httpServer = createServer(app);
-const wss = new WebSocketServer({ server: httpServer });
+const wss = new WebSocketServer({ server: httpServer, path: '/ws' });
 
 // Ensure uploads directory exists
 const uploadsDir = join(process.cwd(), 'data', 'uploads');

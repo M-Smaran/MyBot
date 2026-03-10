@@ -34,15 +34,22 @@ export function useWebSocket() {
     });
   }, []);
 
-  useEffect(() => {
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const destroyedRef = useRef(false);
+
+  const connect = useCallback(() => {
+    if (destroyedRef.current) return;
+
     const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsHost = import.meta.env.VITE_WS_URL || `${wsProtocol}//${window.location.host}`;
-    const ws = new WebSocket(wsHost);
+    const ws = new WebSocket(`${wsProtocol}//${window.location.host}/ws`);
     wsRef.current = ws;
 
     ws.onopen = () => {
-      console.log('WebSocket connected');
       setIsConnected(true);
+      if (reconnectTimerRef.current) {
+        clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
+      }
     };
 
     ws.onmessage = (event) => {
@@ -116,19 +123,28 @@ export function useWebSocket() {
     };
 
     ws.onclose = () => {
-      console.log('WebSocket disconnected');
       setIsConnected(false);
+      setIsTyping(false);
+      // Auto-reconnect after 2 seconds unless component unmounted
+      if (!destroyedRef.current) {
+        reconnectTimerRef.current = setTimeout(connect, 2000);
+      }
     };
 
-    ws.onerror = (error) => {
-      console.error('WebSocket error:', error);
+    ws.onerror = () => {
       setIsConnected(false);
-    };
-
-    return () => {
-      ws.close();
     };
   }, []);
+
+  useEffect(() => {
+    destroyedRef.current = false;
+    connect();
+    return () => {
+      destroyedRef.current = true;
+      if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+      wsRef.current?.close();
+    };
+  }, [connect]);
 
   const sendMessage = useCallback((content: string) => {
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {

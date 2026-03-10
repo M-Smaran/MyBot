@@ -13,6 +13,7 @@ import {
   createBooking,
   cancelBooking,
   rescheduleBooking,
+  getCalcomUserEmail,
 } from './calcom-client.js';
 
 const logger = createModuleLogger('calcom-tools');
@@ -20,6 +21,7 @@ const logger = createModuleLogger('calcom-tools');
 // ── Tool name constants ───────────────────────────────────────────────────────
 
 const TOOL_NAMES = [
+  'calcom_get_account_email',
   'calcom_list_event_types',
   'calcom_list_bookings',
   'calcom_check_availability',
@@ -37,6 +39,14 @@ export function isCalcomTool(name: string): name is CalcomToolName {
 // ── Tool definitions ──────────────────────────────────────────────────────────
 
 export const CALCOM_TOOLS: LLMTool[] = [
+  {
+    type: 'function',
+    function: {
+      name: 'calcom_get_account_email',
+      description: 'Get the email address of the connected Cal.com account. Use this when the user asks what email is linked to Cal.com or to confirm the account email before booking.',
+      parameters: { type: 'object', properties: {}, required: [] },
+    },
+  },
   {
     type: 'function',
     function: {
@@ -71,7 +81,7 @@ export const CALCOM_TOOLS: LLMTool[] = [
     type: 'function',
     function: {
       name: 'calcom_check_availability',
-      description: 'Check available time slots for a Cal.com event type within a date range. Returns available slots grouped by date. IMPORTANT: You must first call calcom_list_event_types to get a valid eventTypeId before calling this tool.',
+      description: 'Check available time slots for a Cal.com event type within a date range. Returns available slots in UTC. IMPORTANT: (1) You must first call calcom_list_event_types to get a valid eventTypeId. (2) The returned slot times are in UTC — pass them EXACTLY as returned when calling calcom_create_booking.',
       parameters: {
         type: 'object',
         properties: {
@@ -81,15 +91,15 @@ export const CALCOM_TOOLS: LLMTool[] = [
           },
           startTime: {
             type: 'string',
-            description: 'Start of the date range in ISO 8601 format (e.g., 2025-03-01T00:00:00Z).',
+            description: 'Start of the date range in UTC ISO 8601 format (e.g., 2025-03-01T00:00:00Z).',
           },
           endTime: {
             type: 'string',
-            description: 'End of the date range in ISO 8601 format (e.g., 2025-03-07T23:59:59Z).',
+            description: 'End of the date range in UTC ISO 8601 format (e.g., 2025-03-07T23:59:59Z).',
           },
-          timeZone: {
-            type: 'string',
-            description: 'IANA timezone (e.g., America/New_York). Defaults to UTC.',
+          slotDuration: {
+            type: 'number',
+            description: 'Optional slot duration in minutes (e.g., 30, 45, 60). Overrides the event type default. Use when the user asks for 30-minute or 45-minute slots.',
           },
         },
         required: ['eventTypeId', 'startTime', 'endTime'],
@@ -100,7 +110,7 @@ export const CALCOM_TOOLS: LLMTool[] = [
     type: 'function',
     function: {
       name: 'calcom_create_booking',
-      description: 'Create a new booking on Cal.com for a specific event type and time slot.',
+      description: 'Create a new booking on Cal.com. IMPORTANT: The "start" field must be the exact UTC slot time returned by calcom_check_availability — do NOT convert or reformat it.',
       parameters: {
         type: 'object',
         properties: {
@@ -110,7 +120,7 @@ export const CALCOM_TOOLS: LLMTool[] = [
           },
           start: {
             type: 'string',
-            description: 'Start time of the booking in ISO 8601 format (e.g., 2025-03-05T14:00:00Z).',
+            description: 'Start time in UTC ISO 8601 — copy EXACTLY from calcom_check_availability result (e.g., 2025-03-05T09:00:00.000Z).',
           },
           attendeeName: {
             type: 'string',
@@ -119,10 +129,6 @@ export const CALCOM_TOOLS: LLMTool[] = [
           attendeeEmail: {
             type: 'string',
             description: 'Email address of the attendee. Optional — omit to use the Cal.com account email automatically.',
-          },
-          timeZone: {
-            type: 'string',
-            description: 'IANA timezone (e.g., Europe/Berlin). Defaults to Europe/Berlin (CET) if not specified.',
           },
           notes: {
             type: 'string',
@@ -188,6 +194,11 @@ export async function executeCalcomTool(name: string, args: Record<string, any>)
 
   try {
     switch (name as CalcomToolName) {
+      case 'calcom_get_account_email': {
+        const email = await getCalcomUserEmail();
+        return email ? `Cal.com account email: ${email}` : 'Could not retrieve account email.';
+      }
+
       case 'calcom_list_event_types': {
         const types = await listEventTypes();
         if (types.length === 0) return 'No event types found on Cal.com.';
@@ -219,7 +230,7 @@ export async function executeCalcomTool(name: string, args: Record<string, any>)
           args.eventTypeId,
           args.startTime,
           args.endTime,
-          args.timeZone
+          args.slotDuration
         );
         if (slots.length === 0 || slots.every(d => d.slots.length === 0)) {
           return 'No available slots found for that date range.';
